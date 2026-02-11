@@ -221,6 +221,7 @@ export function TestCaseList({
                 />
               </TableHead>
               <TableHead className="max-w-0 w-full">Title</TableHead>
+              <TableHead className="w-[140px]">Created By</TableHead>
               <TableHead className="w-[120px]">Account</TableHead>
               <TableHead className="w-[120px]">Group</TableHead>
               <TableHead className="w-[100px]">Last Run</TableHead>
@@ -231,7 +232,7 @@ export function TestCaseList({
           <TableBody>
             {filteredTestCases.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center whitespace-normal">
+                <TableCell colSpan={8} className="h-24 text-center whitespace-normal">
                   <p className="text-xs text-muted-foreground">No test cases match this filter.</p>
                 </TableCell>
               </TableRow>
@@ -289,6 +290,16 @@ export function TestCaseList({
                         </div>
                       )}
                     </div>
+                  </TableCell>
+
+                  {/* Created By */}
+                  <TableCell>
+                    <span
+                      className="block max-w-[140px] truncate text-xs text-muted-foreground"
+                      title={testCase.createdByName || undefined}
+                    >
+                      {testCase.createdByName || '—'}
+                    </span>
                   </TableCell>
 
                   {/* Account */}

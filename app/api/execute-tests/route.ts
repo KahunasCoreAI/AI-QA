@@ -16,6 +16,13 @@ interface ExecuteTestsRequest {
   settings?: Partial<QASettings>;
 }
 
+interface ExecutionCredentials {
+  email: string;
+  password: string;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}
+
 function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> {
   return {
     ...settings,
@@ -127,24 +134,55 @@ export async function POST(request: NextRequest) {
       // Account-aware scheduler with round-robin for "__any__" assignments
       const lockedAccounts = new Set<string>();
       const allAccountIds = Array.from(accountMap.keys());
-      let roundRobinIndex = 0; // tracks next account for round-robin
+      const preferredAnyAccountIds = allAccountIds.filter((accountId) =>
+        Boolean(accountMap.get(accountId)?.profileId)
+      );
+      let preferredRoundRobinIndex = 0;
+      let fallbackRoundRobinIndex = 0;
       const results: TestResult[] = [];
       const pending = [...testCases];
       let running = 0;
 
-      // Resolve "__any__" to the next free account (round-robin)
-      function pickFreeAccount(): string | undefined {
-        if (allAccountIds.length === 0) return undefined;
-        // Try each account starting from roundRobinIndex
-        for (let i = 0; i < allAccountIds.length; i++) {
-          const idx = (roundRobinIndex + i) % allAccountIds.length;
-          const accountId = allAccountIds[idx];
-          if (!lockedAccounts.has(accountId)) {
-            roundRobinIndex = (idx + 1) % allAccountIds.length;
-            return accountId;
+      function hasUnlockedAccount(accountIds: string[]): boolean {
+        return accountIds.some((accountId) => !lockedAccounts.has(accountId));
+      }
+
+      function pickFromPool(
+        accountIds: string[],
+        pool: 'preferred' | 'fallback'
+      ): string | undefined {
+        if (accountIds.length === 0) return undefined;
+        const startIndex = pool === 'preferred' ? preferredRoundRobinIndex : fallbackRoundRobinIndex;
+
+        for (let i = 0; i < accountIds.length; i++) {
+          const idx = (startIndex + i) % accountIds.length;
+          const accountId = accountIds[idx];
+          if (lockedAccounts.has(accountId)) continue;
+
+          if (pool === 'preferred') {
+            preferredRoundRobinIndex = (idx + 1) % accountIds.length;
+          } else {
+            fallbackRoundRobinIndex = (idx + 1) % accountIds.length;
           }
+
+          return accountId;
         }
-        return undefined; // all accounts locked
+
+        return undefined;
+      }
+
+      function hasFreeAnyAccount(): boolean {
+        if (preferredAnyAccountIds.length > 0 && hasUnlockedAccount(preferredAnyAccountIds)) return true;
+        return hasUnlockedAccount(allAccountIds);
+      }
+
+      // Resolve "__any__" to the next free account.
+      // Prefer accounts with reusable provider profiles (persisted sessions),
+      // then fall back to any unlocked account.
+      function pickFreeAccount(): string | undefined {
+        const preferred = pickFromPool(preferredAnyAccountIds, 'preferred');
+        if (preferred) return preferred;
+        return pickFromPool(allAccountIds, 'fallback');
       }
 
       await new Promise<void>((resolve) => {
@@ -152,7 +190,7 @@ export async function POST(request: NextRequest) {
           while (running < parallelLimit && pending.length > 0) {
             const idx = pending.findIndex((tc) => {
               if (!tc.userAccountId) return true;
-              if (tc.userAccountId === '__any__') return pickFreeAccount() !== undefined;
+              if (tc.userAccountId === '__any__') return hasFreeAnyAccount();
               return !lockedAccounts.has(tc.userAccountId);
             });
             if (idx === -1) break; // all remaining need locked accounts
@@ -216,6 +254,40 @@ export async function POST(request: NextRequest) {
                 else trySchedule();
               });
           }
+
+          if (running === 0 && pending.length > 0) {
+            const unscheduled = pending.splice(0, pending.length);
+            for (const pendingTest of unscheduled) {
+              const reason =
+                pendingTest.userAccountId === '__any__'
+                  ? 'No available user accounts were eligible for this provider.'
+                  : 'No available account could be allocated for this test.';
+
+              const unscheduledResult: TestResult = {
+                id: generateId(),
+                testCaseId: pendingTest.id,
+                status: 'error',
+                startedAt: Date.now(),
+                completedAt: Date.now(),
+                error: reason,
+                reason,
+              };
+
+              results.push(unscheduledResult);
+              void sendEvent({
+                type: 'test_error',
+                testCaseId: pendingTest.id,
+                timestamp: Date.now(),
+                data: {
+                  error: reason,
+                  result: unscheduledResult,
+                },
+              });
+            }
+            resolve();
+            return;
+          }
+
           if (running === 0 && pending.length === 0) resolve();
         }
         trySchedule();
@@ -263,11 +335,8 @@ function buildAccountMapFromTeamState(
   testCases: TestCase[],
   state: QAState,
   settings: Partial<QASettings>
-): Map<string, { email: string; password: string; profileId?: string; metadata?: Record<string, string> }> {
-  const map = new Map<
-    string,
-    { email: string; password: string; profileId?: string; metadata?: Record<string, string> }
-  >();
+): Map<string, ExecutionCredentials> {
+  const map = new Map<string, ExecutionCredentials>();
 
   const projectIds = new Set(testCases.map((testCase) => testCase.projectId));
   for (const projectId of projectIds) {
@@ -296,7 +365,7 @@ async function executeTestCase(
   aiModel: string,
   settings: Partial<QASettings>,
   sendEvent?: (event: TestEvent) => Promise<void>,
-  credentials?: { email: string; password: string; profileId?: string; metadata?: Record<string, string> }
+  credentials?: ExecutionCredentials
 ): Promise<TestResult> {
   const testCaseId = testCase.id;
   const startTime = Date.now();
@@ -470,21 +539,30 @@ async function executeTestCase(
 
 function buildGoalFromTestCase(
   testCase: TestCase,
-  credentials?: { email: string; password: string; metadata?: Record<string, string> }
+  credentials?: ExecutionCredentials
 ): string {
   let goal = '';
 
   if (credentials) {
-    goal += `IMPORTANT: Before performing the test, you must first log in to the application.\n`;
-    goal += `Use these credentials to log in:\n`;
-    goal += `- Email: ${credentials.email}\n`;
-    goal += `- Password: ${credentials.password}\n`;
+    if (credentials.profileId) {
+      goal += `IMPORTANT: Reuse the existing authenticated browser profile/session for this account.\n`;
+      goal += `Only log in manually if the app clearly shows you are signed out or blocked at a login screen.\n`;
+      goal += `Fallback credentials (use only if login is required):\n`;
+      goal += `- Email: ${credentials.email}\n`;
+      goal += `- Password: ${credentials.password}\n`;
+    } else {
+      goal += `IMPORTANT: Before performing the test, you must first log in to the application.\n`;
+      goal += `Use these credentials to log in:\n`;
+      goal += `- Email: ${credentials.email}\n`;
+      goal += `- Password: ${credentials.password}\n`;
+    }
+
     if (credentials.metadata && Object.keys(credentials.metadata).length > 0) {
       goal += `- Account info: ${Object.entries(credentials.metadata)
         .map(([k, v]) => `${k}=${v}`)
         .join(', ')}\n`;
     }
-    goal += `\nAfter successfully logging in, proceed with the following test:\n\n`;
+    goal += `\nAfter confirming authentication state, proceed with the following test:\n\n`;
   }
 
   goal += testCase.description;

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useReducer, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, ReactNode, useCallback, useRef } from 'react';
 import type {
   QAState,
   QAAction,
@@ -709,6 +709,7 @@ const QAContext = createContext<QAContextType | undefined>(undefined);
 
 export function QAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const viewerRef = useRef<{ id: string; displayName: string } | null>(null);
 
   // Load shared team state from server on mount
   useEffect(() => {
@@ -722,6 +723,17 @@ export function QAProvider({ children }: { children: ReactNode }) {
         }
 
         const payload = await response.json();
+        const viewer = payload?.viewer;
+        if (viewer && typeof viewer.id === 'string') {
+          viewerRef.current = {
+            id: viewer.id,
+            displayName:
+              typeof viewer.displayName === 'string' && viewer.displayName.trim().length > 0
+                ? viewer.displayName.trim()
+                : viewer.id,
+          };
+        }
+
         if (!isCancelled && payload?.state) {
           dispatch({ type: 'LOAD_STATE', payload: payload.state as QAState });
           return;
@@ -802,6 +814,7 @@ export function QAProvider({ children }: { children: ReactNode }) {
     expectedOutcome: string,
     userAccountId?: string
   ): TestCase => {
+    const viewer = viewerRef.current;
     const testCase: TestCase = {
       id: generateId(),
       projectId,
@@ -810,6 +823,8 @@ export function QAProvider({ children }: { children: ReactNode }) {
       expectedOutcome,
       status: 'pending',
       createdAt: Date.now(),
+      createdByUserId: viewer?.id,
+      createdByName: viewer?.displayName,
       userAccountId,
     };
     dispatch({ type: 'CREATE_TEST_CASE', payload: testCase });
@@ -821,6 +836,7 @@ export function QAProvider({ children }: { children: ReactNode }) {
     projectId: string,
     tests: GeneratedTest[]
   ): TestCase[] => {
+    const viewer = viewerRef.current;
     const now = Date.now();
     const testCases: TestCase[] = tests.map((test, index) => ({
       id: generateId() + `-${index}`,
@@ -830,6 +846,8 @@ export function QAProvider({ children }: { children: ReactNode }) {
       expectedOutcome: test.expectedOutcome,
       status: 'pending' as const,
       createdAt: now + index, // Ensure unique timestamps for ordering
+      createdByUserId: viewer?.id,
+      createdByName: viewer?.displayName,
     }));
     dispatch({ type: 'CREATE_TEST_CASES_BULK', payload: testCases });
     return testCases;

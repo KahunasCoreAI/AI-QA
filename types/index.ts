@@ -21,6 +21,8 @@ export interface TestCase {
   expectedOutcome: string;
   status: TestStatus;
   createdAt: number;
+  createdByUserId?: string;
+  createdByName?: string;
   lastRunResult?: TestResult;
   userAccountId?: string;
 }

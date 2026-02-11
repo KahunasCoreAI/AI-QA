@@ -10,7 +10,14 @@ export async function GET() {
     enforceRateLimit(`state:get:${team.userId}`, { limit: 120, windowMs: 60_000 });
 
     const state = await getTeamStateForClient(team.teamId);
-    return NextResponse.json({ state });
+    return NextResponse.json({
+      state,
+      viewer: {
+        id: team.userId,
+        email: team.email,
+        displayName: team.displayName,
+      },
+    });
   } catch (error) {
     return handleRouteError(error, 'Failed to load state');
   }
@@ -33,4 +40,3 @@ export async function PUT(request: NextRequest) {
     return handleRouteError(error, 'Failed to save state');
   }
 }
-

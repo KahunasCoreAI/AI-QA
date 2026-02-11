@@ -44,6 +44,8 @@ export async function requireTeamContext() {
   const db = getDb();
   const userId = authState.userId;
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim() || null;
+  const fallbackDisplayName = normalizedEmail.split('@')[0] || userId;
+  const displayName = fullName || fallbackDisplayName;
 
   await db
     .insert(schema.teams)
@@ -91,6 +93,6 @@ export async function requireTeamContext() {
     teamId: SHARED_TEAM_ID,
     userId,
     email: normalizedEmail,
+    displayName,
   };
 }
-
