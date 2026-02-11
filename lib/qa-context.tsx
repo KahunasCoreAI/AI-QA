@@ -725,12 +725,14 @@ export function QAProvider({ children }: { children: ReactNode }) {
         const payload = await response.json();
         const viewer = payload?.viewer;
         if (viewer && typeof viewer.id === 'string') {
+          const rawDisplayName =
+            typeof viewer.displayName === 'string' && viewer.displayName.trim().length > 0
+              ? viewer.displayName.trim()
+              : viewer.id;
+          const firstToken = rawDisplayName.split(/\s+/)[0] || rawDisplayName;
           viewerRef.current = {
             id: viewer.id,
-            displayName:
-              typeof viewer.displayName === 'string' && viewer.displayName.trim().length > 0
-                ? viewer.displayName.trim()
-                : viewer.id,
+            displayName: firstToken,
           };
         }
 

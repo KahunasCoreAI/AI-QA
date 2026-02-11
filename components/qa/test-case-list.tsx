@@ -245,6 +245,9 @@ export function TestCaseList({
 
               // Resolve account label
               let accountCell: React.ReactNode;
+              const createdByDisplay =
+                testCase.createdByName?.trim().split(/\s+/)[0] ||
+                (testCase.createdByUserId ? 'User' : '—');
               if (testCase.userAccountId === '__any__') {
                 accountCell = (
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -296,9 +299,9 @@ export function TestCaseList({
                   <TableCell>
                     <span
                       className="block max-w-[140px] truncate text-xs text-muted-foreground"
-                      title={testCase.createdByName || undefined}
+                      title={createdByDisplay === '—' ? undefined : createdByDisplay}
                     >
-                      {testCase.createdByName || '—'}
+                      {createdByDisplay}
                     </span>
                   </TableCell>
 
