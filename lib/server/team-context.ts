@@ -4,6 +4,7 @@ import { getDb, schema } from '@/lib/db/client';
 
 export const ALLOWED_EMAIL_DOMAIN = 'kahunas.io';
 export const SHARED_TEAM_ID = 'team-kahunas';
+export const SETTINGS_OWNER_EMAIL = 'mark@kahunas.io';
 
 export class AccessError extends Error {
   status: number;
@@ -96,4 +97,8 @@ export async function requireTeamContext() {
     email: normalizedEmail,
     displayName,
   };
+}
+
+export function canManageTeamSettings(email: string): boolean {
+  return email.toLowerCase() === SETTINGS_OWNER_EMAIL;
 }

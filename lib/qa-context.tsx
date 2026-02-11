@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useReducer, useEffect, ReactNode, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, ReactNode, useCallback, useRef, useState } from 'react';
 import type {
   QAState,
   QAAction,
@@ -669,6 +669,7 @@ function reducer(state: QAState, action: QAAction): QAState {
 interface QAContextType {
   state: QAState;
   dispatch: React.Dispatch<QAAction>;
+  currentViewer: { id: string; email?: string; displayName: string } | null;
   // Project actions
   createProject: (name: string, websiteUrl: string, description?: string) => Project;
   updateProject: (id: string, updates: Partial<Project>) => void;
@@ -710,6 +711,7 @@ const QAContext = createContext<QAContextType | undefined>(undefined);
 export function QAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const viewerRef = useRef<{ id: string; displayName: string } | null>(null);
+  const [currentViewer, setCurrentViewer] = useState<{ id: string; email?: string; displayName: string } | null>(null);
 
   // Load shared team state from server on mount
   useEffect(() => {
@@ -730,10 +732,16 @@ export function QAProvider({ children }: { children: ReactNode }) {
               ? viewer.displayName.trim()
               : viewer.id;
           const firstToken = rawDisplayName.split(/\s+/)[0] || rawDisplayName;
+          const email = typeof viewer.email === 'string' ? viewer.email : undefined;
           viewerRef.current = {
             id: viewer.id,
             displayName: firstToken,
           };
+          setCurrentViewer({
+            id: viewer.id,
+            email,
+            displayName: firstToken,
+          });
         }
 
         if (!isCancelled && payload?.state) {
@@ -986,6 +994,7 @@ export function QAProvider({ children }: { children: ReactNode }) {
   const value: QAContextType = {
     state,
     dispatch,
+    currentViewer,
     createProject,
     updateProject,
     deleteProject,

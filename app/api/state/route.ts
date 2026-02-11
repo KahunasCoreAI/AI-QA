@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { enforceRateLimit } from '@/lib/security/rate-limit';
-import { requireTeamContext } from '@/lib/server/team-context';
-import { getTeamStateForClient, saveTeamState } from '@/lib/server/team-state-store';
+import { canManageTeamSettings, requireTeamContext } from '@/lib/server/team-context';
+import { getOrCreateTeamState, getTeamStateForClient, saveTeamState } from '@/lib/server/team-state-store';
 import { handleRouteError } from '@/lib/server/route-utils';
 
 export async function GET() {
@@ -34,7 +34,15 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'state is required' }, { status: 400 });
     }
 
-    const saved = await saveTeamState(team.teamId, team.userId, nextState);
+    const canManageSettings = canManageTeamSettings(team.email);
+    const stateToSave = canManageSettings
+      ? nextState
+      : {
+          ...(nextState as Record<string, unknown>),
+          settings: (await getOrCreateTeamState(team.teamId)).settings,
+        };
+
+    const saved = await saveTeamState(team.teamId, team.userId, stateToSave);
     return NextResponse.json({ state: saved });
   } catch (error) {
     return handleRouteError(error, 'Failed to save state');

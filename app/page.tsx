@@ -51,6 +51,7 @@ import type {
 
 type TestCreationMode = 'choice' | 'manual' | 'ai';
 type AccountProviderColumn = 'hyperbrowser' | 'browser-use-cloud';
+const SETTINGS_OWNER_EMAIL = 'mark@kahunas.io';
 
 function getProviderProfileKey(provider: BrowserProvider): AccountProfileProviderKey {
   return provider === 'browser-use-cloud' ? 'browserUseCloud' : 'hyperbrowser';
@@ -67,6 +68,7 @@ function resolveProviderForColumn(
 export default function DashboardPage() {
   const {
     state,
+    currentViewer,
     createProject,
     updateProject,
     deleteProject,
@@ -109,6 +111,9 @@ export default function DashboardPage() {
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
 
   const currentProject = getCurrentProject();
+  const currentUserEmail = (currentViewer?.email || '').toLowerCase();
+  const currentUserFirstName = currentViewer?.displayName;
+  const canManageSettings = currentUserEmail === SETTINGS_OWNER_EMAIL;
   const testCases = useMemo(
     () => currentProject ? getTestCasesForProject(currentProject.id) : [],
     [currentProject, getTestCasesForProject]
@@ -654,6 +659,7 @@ export default function DashboardPage() {
               onSaveAsGroupClick={() => setCreateGroupDialogOpen(true)}
               onRemoveFromGroup={handleRemoveFromGroup}
               userAccounts={userAccounts}
+              fallbackCreatorName={currentUserFirstName}
             />
           </div>
         );
@@ -772,6 +778,24 @@ export default function DashboardPage() {
         );
 
       case 'settings':
+        if (!canManageSettings) {
+          return (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-base font-semibold tracking-tight">Settings</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Contact Mark
+                </p>
+              </div>
+              <Card className="border-border/40">
+                <CardContent className="py-8">
+                  <p className="text-sm text-muted-foreground">Contact Mark</p>
+                </CardContent>
+              </Card>
+            </div>
+          );
+        }
+
         return (
           <div className="space-y-4">
             <div>

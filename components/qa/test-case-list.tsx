@@ -32,6 +32,7 @@ interface TestCaseListProps {
   onSaveAsGroupClick: () => void;
   onRemoveFromGroup: (testCaseId: string, group: TestGroup) => void;
   userAccounts?: UserAccount[];
+  fallbackCreatorName?: string;
 }
 
 const getStatusBadge = (status: string) => {
@@ -64,6 +65,7 @@ export function TestCaseList({
   onSaveAsGroupClick,
   onRemoveFromGroup,
   userAccounts = [],
+  fallbackCreatorName,
 }: TestCaseListProps) {
   const [groupFilter, setGroupFilter] = useState<string>('__all__');
 
@@ -247,6 +249,7 @@ export function TestCaseList({
               let accountCell: React.ReactNode;
               const createdByDisplay =
                 testCase.createdByName?.trim().split(/\s+/)[0] ||
+                fallbackCreatorName?.trim().split(/\s+/)[0] ||
                 (testCase.createdByUserId ? 'User' : '—');
               if (testCase.userAccountId === '__any__') {
                 accountCell = (
