@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TestCase, TestResult, TestEvent } from '@/types';
+import type { TestCase, TestResult, TestEvent, QASettings } from '@/types';
 
 /**
  * Hook for localStorage with SSR support
@@ -76,6 +76,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
           newResults.set(testCaseId, {
             ...existing,
             streamingUrl: data?.streamingUrl,
+            ...(data?.recordingUrl ? { recordingUrl: data.recordingUrl } : {}),
           });
           break;
 
@@ -118,7 +119,8 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
     testCases: TestCase[],
     websiteUrl: string,
     parallelLimit: number,
-    aiModel: string
+    aiModel: string,
+    settings: QASettings
   ) => {
     if (isExecuting) return;
 
@@ -138,6 +140,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
           websiteUrl,
           parallelLimit,
           aiModel,
+          settings,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -279,6 +282,8 @@ export function useKeyboardShortcut(
   callback: () => void,
   modifiers: { ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean } = {}
 ) {
+  const { ctrl, meta, shift, alt } = modifiers;
+
   // Use a ref to store the callback to avoid stale closures
   const callbackRef = useRef(callback);
   
@@ -289,7 +294,6 @@ export function useKeyboardShortcut(
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const { ctrl, meta, shift, alt } = modifiers;
       const modifierMatch =
         (ctrl === undefined || event.ctrlKey === ctrl) &&
         (meta === undefined || event.metaKey === meta) &&
@@ -304,7 +308,7 @@ export function useKeyboardShortcut(
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [key, modifiers.ctrl, modifiers.meta, modifiers.shift, modifiers.alt]);
+  }, [key, ctrl, meta, shift, alt]);
 }
 
 /**

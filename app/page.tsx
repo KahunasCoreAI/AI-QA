@@ -5,7 +5,6 @@ import { useQA } from '@/lib/qa-context';
 import { useTestExecution } from '@/lib/hooks';
 import {
   DashboardLayout,
-  ProjectCard,
   ProjectDialog,
   TestCaseEditor,
   TestCaseList,
@@ -14,7 +13,10 @@ import {
   TestResultsTable,
   SettingsPanel,
   AITestGenerator,
+  CreateGroupDialog,
+  UserAccountsManager,
 } from '@/components/qa';
+import type { TabType } from '@/components/qa/dashboard-layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -35,13 +37,32 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
-  TestTube2,
   Sparkles,
 } from 'lucide-react';
-import type { Project, TestCase, GeneratedTest } from '@/types';
+import type {
+  Project,
+  TestCase,
+  TestGroup,
+  GeneratedTest,
+  BrowserProvider,
+  UserAccount,
+  AccountProfileProviderKey,
+} from '@/types';
 
-type TabType = 'projects' | 'tests' | 'execution' | 'history' | 'settings';
 type TestCreationMode = 'choice' | 'manual' | 'ai';
+type AccountProviderColumn = 'hyperbrowser' | 'browser-use-cloud';
+
+function getProviderProfileKey(provider: BrowserProvider): AccountProfileProviderKey {
+  return provider === 'browser-use-cloud' ? 'browserUseCloud' : 'hyperbrowser';
+}
+
+function resolveProviderForColumn(
+  providerColumn: AccountProviderColumn,
+  selectedProvider: BrowserProvider
+): BrowserProvider {
+  if (providerColumn === 'browser-use-cloud') return 'browser-use-cloud';
+  return selectedProvider === 'browser-use-cloud' ? 'hyperbrowser-browser-use' : selectedProvider;
+}
 
 export default function DashboardPage() {
   const {
@@ -54,9 +75,19 @@ export default function DashboardPage() {
     createTestCasesBulk,
     updateTestCase,
     deleteTestCase,
+    createTestGroup,
+    updateTestGroup,
+    deleteTestGroup,
+    getTestGroupsForProject,
+    createUserAccount,
+    updateUserAccount,
+    deleteUserAccount,
+    getUserAccountsForProject,
     startTestRun,
     updateTestResult,
     completeTestRun,
+    deleteTestResult,
+    clearTestRuns,
     updateSettings,
     getCurrentProject,
     getTestCasesForProject,
@@ -64,23 +95,33 @@ export default function DashboardPage() {
     reset,
   } = useQA();
 
-  const [activeTab, setActiveTab] = useState<TabType>('projects');
+  const [activeTab, setActiveTab] = useState<TabType>('tests');
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | undefined>();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [testCaseToDelete, setTestCaseToDelete] = useState<{ id: string; projectId: string } | null>(null);
+  const [groupToDelete, setGroupToDelete] = useState<{ id: string; projectId: string } | null>(null);
   const [selectedTestIds, setSelectedTestIds] = useState<Set<string>>(new Set());
   const [testCreationMode, setTestCreationMode] = useState<TestCreationMode | null>(null);
   const [editingTestCase, setEditingTestCase] = useState<TestCase | undefined>();
   const [viewingTestCase, setViewingTestCase] = useState<TestCase | null>(null);
+  const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
 
   const currentProject = getCurrentProject();
   const testCases = useMemo(
     () => currentProject ? getTestCasesForProject(currentProject.id) : [],
     [currentProject, getTestCasesForProject]
   );
+  const testGroups = useMemo(
+    () => currentProject ? getTestGroupsForProject(currentProject.id) : [],
+    [currentProject, getTestGroupsForProject]
+  );
   const testRuns = currentProject ? getTestRunsForProject(currentProject.id) : [];
+  const userAccounts = useMemo(
+    () => currentProject ? getUserAccountsForProject(currentProject.id) : [],
+    [currentProject, getUserAccountsForProject]
+  );
 
   // Track synced results to avoid infinite loops
   const syncedResultsRef = useRef<Map<string, string>>(new Map());
@@ -135,13 +176,10 @@ export default function DashboardPage() {
 
   // Handle tab changes
   const handleTabChange = useCallback((tab: TabType) => {
-    if (tab === 'projects') {
-      setCurrentProject(null);
-    }
     setActiveTab(tab);
     setTestCreationMode(null);
     setViewingTestCase(null);
-  }, [setCurrentProject]);
+  }, []);
 
   // View test case detail
   const handleViewTestCase = useCallback((testCase: TestCase) => {
@@ -153,7 +191,6 @@ export default function DashboardPage() {
   const handleCreateProject = useCallback((name: string, websiteUrl: string, description?: string) => {
     const project = createProject(name, websiteUrl, description);
     setCurrentProject(project.id);
-    setActiveTab('tests');
   }, [createProject, setCurrentProject]);
 
   const handleEditProject = useCallback((project: Project) => {
@@ -185,17 +222,20 @@ export default function DashboardPage() {
 
   const handleSelectProject = useCallback((project: Project) => {
     setCurrentProject(project.id);
-    setActiveTab('tests');
+    // Reset sub-views when switching projects
+    setTestCreationMode(null);
+    setViewingTestCase(null);
+    setSelectedTestIds(new Set());
   }, [setCurrentProject]);
 
   // Test case handlers
-  const handleSaveTestCase = useCallback((testCase: Pick<TestCase, 'title' | 'description' | 'expectedOutcome' | 'status'>) => {
+  const handleSaveTestCase = useCallback((testCase: Pick<TestCase, 'title' | 'description' | 'expectedOutcome' | 'status'> & { userAccountId?: string }) => {
     if (!currentProject) return;
 
     if (editingTestCase) {
-      updateTestCase(editingTestCase.id, currentProject.id, testCase);
+      updateTestCase(editingTestCase.id, currentProject.id, { ...testCase, userAccountId: testCase.userAccountId });
     } else {
-      createTestCase(currentProject.id, testCase.title, testCase.description, testCase.expectedOutcome);
+      createTestCase(currentProject.id, testCase.title, testCase.description, testCase.expectedOutcome, testCase.userAccountId);
     }
     setTestCreationMode(null);
     setEditingTestCase(undefined);
@@ -225,7 +265,145 @@ export default function DashboardPage() {
     }
   }, [testCaseToDelete, deleteTestCase]);
 
+  // Test group handlers
+  const handleCreateGroup = useCallback((name: string, testCaseIds: string[]) => {
+    if (!currentProject) return;
+    // Remove these tests from any existing groups they belong to
+    for (const group of testGroups) {
+      const overlapping = testCaseIds.filter((id) => group.testCaseIds.includes(id));
+      if (overlapping.length > 0) {
+        updateTestGroup(group.id, group.projectId, {
+          testCaseIds: group.testCaseIds.filter((id) => !testCaseIds.includes(id)),
+        });
+      }
+    }
+    createTestGroup(currentProject.id, name, testCaseIds);
+    setSelectedTestIds(new Set());
+    setCreateGroupDialogOpen(false);
+  }, [currentProject, testGroups, createTestGroup, updateTestGroup]);
+
+  const confirmDeleteGroup = useCallback(() => {
+    if (groupToDelete) {
+      deleteTestGroup(groupToDelete.id, groupToDelete.projectId);
+      setGroupToDelete(null);
+      setDeleteConfirmOpen(false);
+    }
+  }, [groupToDelete, deleteTestGroup]);
+
+  const handleRemoveFromGroup = useCallback((testCaseId: string, group: TestGroup) => {
+    updateTestGroup(group.id, group.projectId, {
+      testCaseIds: group.testCaseIds.filter((id) => id !== testCaseId),
+    });
+  }, [updateTestGroup]);
+
+  // Profile login/clear handlers
+
+  const handleLoginAccount = useCallback(async (account: UserAccount, providerColumn: AccountProviderColumn) => {
+    if (!currentProject) return;
+    const providerForLogin = resolveProviderForColumn(providerColumn, state.settings.browserProvider);
+    const providerKey = getProviderProfileKey(providerForLogin);
+    const existingProfile = account.providerProfiles?.[providerKey];
+    const reusableProfileId = existingProfile?.profileId;
+
+    // Set authenticating state
+    updateUserAccount(account.id, currentProject.id, {
+      providerProfiles: {
+        ...(account.providerProfiles || {}),
+        [providerKey]: {
+          ...existingProfile,
+          status: 'authenticating',
+        },
+      },
+    });
+
+    try {
+      const response = await fetch('/api/auth-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: account.id,
+          projectId: currentProject.id,
+          websiteUrl: currentProject.websiteUrl,
+          profileId: reusableProfileId, // only reuse IDs from the selected provider
+          settings: {
+            ...state.settings,
+            browserProvider: providerForLogin,
+          },
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success && result.profileId) {
+        updateUserAccount(account.id, currentProject.id, {
+          providerProfiles: {
+            ...(account.providerProfiles || {}),
+            [providerKey]: {
+              profileId: result.profileId,
+              status: 'authenticated',
+              lastAuthenticatedAt: Date.now(),
+            },
+          },
+        });
+      } else {
+        const fallbackStatus = reusableProfileId ? 'expired' : 'none';
+        updateUserAccount(account.id, currentProject.id, {
+          providerProfiles: {
+            ...(account.providerProfiles || {}),
+            [providerKey]: {
+              ...existingProfile,
+              status: fallbackStatus,
+            },
+          },
+        });
+        console.error('Login failed:', result.error);
+      }
+    } catch (error) {
+      const fallbackStatus = reusableProfileId ? 'expired' : 'none';
+      updateUserAccount(account.id, currentProject.id, {
+        providerProfiles: {
+          ...(account.providerProfiles || {}),
+          [providerKey]: {
+            ...existingProfile,
+            status: fallbackStatus,
+          },
+        },
+      });
+      console.error('Login request failed:', error);
+    }
+  }, [currentProject, updateUserAccount, state.settings]);
+
+  const handleClearProfile = useCallback(async (account: UserAccount, providerColumn: AccountProviderColumn) => {
+    if (!currentProject) return;
+    const providerForProfile = resolveProviderForColumn(providerColumn, state.settings.browserProvider);
+    const providerKey = getProviderProfileKey(providerForProfile);
+    const profileId = account.providerProfiles?.[providerKey]?.profileId;
+    if (!profileId) return;
+
+    // Delete profile on selected provider
+    try {
+      await fetch('/api/auth-session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profileId,
+          settings: { ...state.settings, browserProvider: providerForProfile },
+        }),
+      });
+    } catch {
+      // Best effort — clear local state regardless
+    }
+
+    // Clear local profile fields
+    const nextProfiles = { ...(account.providerProfiles || {}) };
+    delete nextProfiles[providerKey];
+    updateUserAccount(account.id, currentProject.id, {
+      providerProfiles: nextProfiles,
+    });
+  }, [currentProject, updateUserAccount, state.settings]);
+
   // Test execution handlers
+
   const handleRunTests = useCallback(async () => {
     if (!currentProject || selectedTestIds.size === 0) return;
 
@@ -233,8 +411,14 @@ export default function DashboardPage() {
     startTestRun(currentProject.id, testsToRun.map((tc) => tc.id));
     setActiveTab('execution');
 
-    await executeTests(testsToRun, currentProject.websiteUrl, state.settings.parallelLimit, state.settings.aiModel);
-  }, [currentProject, selectedTestIds, testCases, startTestRun, executeTests, state.settings.parallelLimit, state.settings.aiModel]);
+    await executeTests(
+      testsToRun,
+      currentProject.websiteUrl,
+      state.settings.parallelLimit,
+      state.settings.aiModel,
+      state.settings
+    );
+  }, [currentProject, selectedTestIds, testCases, startTestRun, executeTests, state.settings]);
 
   const handleRunSingleTest = useCallback(async (testCase: TestCase) => {
     if (!currentProject) return;
@@ -243,8 +427,14 @@ export default function DashboardPage() {
     startTestRun(currentProject.id, [testCase.id]);
     setActiveTab('execution');
 
-    await executeTests([testCase], currentProject.websiteUrl, 1, state.settings.aiModel);
-  }, [currentProject, startTestRun, executeTests, state.settings.aiModel]);
+    await executeTests(
+      [testCase],
+      currentProject.websiteUrl,
+      1,
+      state.settings.aiModel,
+      state.settings
+    );
+  }, [currentProject, startTestRun, executeTests, state.settings]);
 
   const handleStopTests = useCallback(() => {
     cancelExecution();
@@ -259,83 +449,35 @@ export default function DashboardPage() {
   const handleClearData = useCallback(() => {
     if (window.confirm('Are you sure you want to delete all data? This cannot be undone.')) {
       reset();
-      localStorage.removeItem('qa-tester-state');
     }
   }, [reset]);
+
+  // No-project selected prompt (reused across tabs)
+  const renderNoProject = () => (
+    <div className="text-center py-16">
+      <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 mb-3">
+        <Plus className="h-5 w-5 text-primary" />
+      </div>
+      <h3 className="text-sm font-medium mb-1">No project selected</h3>
+      <p className="text-xs text-muted-foreground mb-4">
+        {state.projects.length === 0
+          ? 'Create your first project to get started'
+          : 'Select a project from the sidebar to continue'}
+      </p>
+      {state.projects.length === 0 && (
+        <Button size="sm" className="h-8 text-xs" onClick={() => setProjectDialogOpen(true)}>
+          <Plus className="mr-1.5 h-3.5 w-3.5" />
+          Create Project
+        </Button>
+      )}
+    </div>
+  );
 
   // Render content based on active tab
   const renderContent = () => {
     switch (activeTab) {
-      case 'projects':
-        return (
-          <div className="space-y-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold tracking-tight">Your Projects</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Select a project to manage test cases or create a new one
-                </p>
-              </div>
-              <Button size="sm" className="h-8 text-xs" onClick={() => {
-                setEditingProject(undefined);
-                setProjectDialogOpen(true);
-              }}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                New Project
-              </Button>
-            </div>
-
-            {state.projects.length === 0 ? (
-              <Card className="border-border/40">
-                <CardContent className="py-10 text-center">
-                  <TestTube2 className="mx-auto h-8 w-8 text-muted-foreground/30 mb-3" />
-                  <h3 className="text-sm font-medium mb-1">No projects yet</h3>
-                  <p className="text-xs text-muted-foreground mb-4">
-                    Create your first project to start testing
-                  </p>
-                  <Button size="sm" className="h-8 text-xs" onClick={() => setProjectDialogOpen(true)}>
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    Create Project
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                {state.projects.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    testCases={getTestCasesForProject(project.id)}
-                    onSelect={() => handleSelectProject(project)}
-                    onEdit={() => handleEditProject(project)}
-                    onDelete={() => handleDeleteProject(project.id)}
-                    onRunTests={async () => {
-                      handleSelectProject(project);
-                      const projectTests = getTestCasesForProject(project.id);
-                      if (projectTests.length === 0) return;
-                      startTestRun(project.id, projectTests.map(t => t.id));
-                      setActiveTab('execution');
-                      await executeTests(projectTests, project.websiteUrl, state.settings.parallelLimit, state.settings.aiModel);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-
       case 'tests':
-        if (!currentProject) {
-          return (
-            <div className="text-center py-12">
-              <p className="text-xs text-muted-foreground mb-3">Select a project first</p>
-              <Button size="sm" className="h-7 text-xs" onClick={() => setActiveTab('projects')}>
-                <ArrowLeft className="mr-1.5 h-3 w-3" />
-                Go to Projects
-              </Button>
-            </div>
-          );
-        }
+        if (!currentProject) return renderNoProject();
 
         // Show test case detail view
         if (viewingTestCase) {
@@ -344,6 +486,8 @@ export default function DashboardPage() {
           return (
             <TestCaseDetail
               testCase={freshTestCase}
+              testRuns={testRuns}
+              userAccounts={userAccounts}
               onBack={() => setViewingTestCase(null)}
               onEdit={() => {
                 setEditingTestCase(freshTestCase);
@@ -434,6 +578,7 @@ export default function DashboardPage() {
               <TestCaseEditor
                 testCase={editingTestCase}
                 websiteUrl={currentProject.websiteUrl}
+                userAccounts={userAccounts}
                 onSave={handleSaveTestCase}
                 onCancel={() => {
                   setTestCreationMode(null);
@@ -504,6 +649,11 @@ export default function DashboardPage() {
               onDelete={handleDeleteTestCase}
               onRun={handleRunSingleTest}
               onCreateNew={() => setTestCreationMode('choice')}
+              groups={testGroups}
+              parallelLimit={state.settings.parallelLimit}
+              onSaveAsGroupClick={() => setCreateGroupDialogOpen(true)}
+              onRemoveFromGroup={handleRemoveFromGroup}
+              userAccounts={userAccounts}
             />
           </div>
         );
@@ -559,24 +709,13 @@ export default function DashboardPage() {
               results={resultsMap}
               isRunning={isExecuting}
               onSkipTest={skipTest}
+              userAccounts={userAccounts}
             />
           </div>
         );
 
       case 'history':
-        if (!currentProject) {
-          return (
-            <div className="text-center py-12">
-              <p className="text-xs text-muted-foreground mb-3">Select a project to view history</p>
-              <Button size="sm" className="h-7 text-xs" onClick={() => setActiveTab('projects')}>
-                <ArrowLeft className="mr-1.5 h-3 w-3" />
-                Go to Projects
-              </Button>
-            </div>
-          );
-        }
-
-        const latestRun = testRuns[0];
+        if (!currentProject) return renderNoProject();
 
         return (
           <div className="space-y-4">
@@ -595,14 +734,40 @@ export default function DashboardPage() {
                   </p>
                 </CardContent>
               </Card>
-            ) : latestRun ? (
+            ) : (
               <TestResultsTable
                 testCases={testCases}
-                results={latestRun.results}
+                testRuns={testRuns}
+                groups={testGroups}
+                userAccounts={userAccounts}
                 projectUrl={currentProject.websiteUrl}
                 aiModel={state.settings.aiModel}
+                onDeleteResult={(runId, resultId) => deleteTestResult(runId, currentProject.id, resultId)}
+                onClearAllRuns={() => clearTestRuns(currentProject.id)}
               />
-            ) : null}
+            )}
+          </div>
+        );
+
+      case 'accounts':
+        if (!currentProject) return renderNoProject();
+        return (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">User Accounts</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Manage test user credentials for {currentProject.name}. Max 20 accounts.
+              </p>
+            </div>
+            <UserAccountsManager
+              projectId={currentProject.id}
+              accounts={userAccounts}
+              onCreateAccount={(label, email, password, metadata) => createUserAccount(currentProject.id, label, email, password, metadata)}
+              onUpdateAccount={(id, updates) => updateUserAccount(id, currentProject.id, updates)}
+              onDeleteAccount={(id) => deleteUserAccount(id, currentProject.id)}
+              onLogin={handleLoginAccount}
+              onClearProfile={handleClearProfile}
+            />
           </div>
         );
 
@@ -634,13 +799,22 @@ export default function DashboardPage() {
       <DashboardLayout
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        projectName={currentProject?.name}
+        projects={state.projects}
+        currentProject={currentProject ?? null}
+        onSelectProject={handleSelectProject}
+        onCreateProject={() => {
+          setEditingProject(undefined);
+          setProjectDialogOpen(true);
+        }}
+        onEditProject={handleEditProject}
+        onDeleteProject={handleDeleteProject}
       >
         {renderContent()}
       </DashboardLayout>
 
       {/* Project Dialog */}
       <ProjectDialog
+        key={`${editingProject?.id ?? 'new'}-${projectDialogOpen ? 'open' : 'closed'}`}
         open={projectDialogOpen}
         onOpenChange={(open) => {
           setProjectDialogOpen(open);
@@ -658,6 +832,8 @@ export default function DashboardPage() {
             <AlertDialogDescription className="text-xs">
               {projectToDelete
                 ? 'This will permanently delete the project and all its test cases.'
+                : groupToDelete
+                ? 'This will delete the group. The tests inside will become ungrouped but will not be deleted.'
                 : 'This will permanently delete this test case.'}
               {' '}This action cannot be undone.
             </AlertDialogDescription>
@@ -666,6 +842,7 @@ export default function DashboardPage() {
             <AlertDialogCancel className="h-8 text-xs" onClick={() => {
               setProjectToDelete(null);
               setTestCaseToDelete(null);
+              setGroupToDelete(null);
             }}>
               Cancel
             </AlertDialogCancel>
@@ -674,6 +851,8 @@ export default function DashboardPage() {
               onClick={() => {
                 if (projectToDelete) {
                   confirmDeleteProject();
+                } else if (groupToDelete) {
+                  confirmDeleteGroup();
                 } else if (testCaseToDelete) {
                   confirmDeleteTestCase();
                 }
@@ -684,6 +863,24 @@ export default function DashboardPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Create Group Dialog */}
+      <CreateGroupDialog
+        open={createGroupDialogOpen}
+        onOpenChange={setCreateGroupDialogOpen}
+        selectedTests={testCases.filter((tc) => selectedTestIds.has(tc.id))}
+        parallelLimit={state.settings.parallelLimit}
+        onCreateGroup={handleCreateGroup}
+        alreadyGroupedTests={
+          testCases
+            .filter((tc) => selectedTestIds.has(tc.id))
+            .map((tc) => {
+              const existingGroup = testGroups.find((g) => g.testCaseIds.includes(tc.id));
+              return existingGroup ? { test: tc, groupName: existingGroup.name } : null;
+            })
+            .filter((item): item is { test: TestCase; groupName: string } => item !== null)
+        }
+      />
     </>
   );
 }

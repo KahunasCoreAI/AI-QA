@@ -6,24 +6,34 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import type { TestCase } from '@/types';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import type { TestCase, UserAccount } from '@/types';
 
 interface TestCaseEditorProps {
   testCase?: Partial<TestCase>;
   websiteUrl: string;
-  onSave: (testCase: Pick<TestCase, 'title' | 'description' | 'expectedOutcome' | 'status'>) => void;
+  userAccounts?: UserAccount[];
+  onSave: (testCase: Pick<TestCase, 'title' | 'description' | 'expectedOutcome' | 'status'> & { userAccountId?: string }) => void;
   onCancel: () => void;
 }
 
 export function TestCaseEditor({
   testCase,
   websiteUrl,
+  userAccounts = [],
   onSave,
   onCancel,
 }: TestCaseEditorProps) {
   const [title, setTitle] = useState(testCase?.title || '');
   const [description, setDescription] = useState(testCase?.description || '');
   const [expectedOutcome, setExpectedOutcome] = useState(testCase?.expectedOutcome || '');
+  const [userAccountId, setUserAccountId] = useState(testCase?.userAccountId || 'none');
 
   const handleSave = () => {
     if (!title.trim() || !description.trim()) return;
@@ -33,6 +43,7 @@ export function TestCaseEditor({
       description,
       expectedOutcome,
       status: 'pending',
+      userAccountId: userAccountId === 'none' ? undefined : (userAccountId || undefined),
     });
   };
 
@@ -79,6 +90,27 @@ export function TestCaseEditor({
               className="h-8 text-sm"
             />
           </div>
+
+          {userAccounts.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="user-account" className="text-xs font-medium">User Account</Label>
+              <p className="text-[11px] text-muted-foreground">Optional — assign a test user for authenticated tests</p>
+              <Select value={userAccountId} onValueChange={setUserAccountId}>
+                <SelectTrigger className="h-8 text-sm w-full">
+                  <SelectValue placeholder="No account (unauthenticated)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No account (unauthenticated)</SelectItem>
+                  <SelectItem value="__any__">Any available account</SelectItem>
+                  {userAccounts.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.label} ({account.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardContent>
       </Card>
 

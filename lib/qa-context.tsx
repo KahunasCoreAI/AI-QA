@@ -6,14 +6,19 @@ import type {
   QAAction,
   Project,
   TestCase,
+  TestGroup,
   TestRun,
   TestResult,
   QASettings,
   GeneratedTest,
+  UserAccount,
 } from '@/types';
 import { generateId } from './utils';
 
 const DEFAULT_AI_MODEL = process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'openai/gpt-5.2';
+const DEFAULT_BROWSER_PROVIDER = 'hyperbrowser-browser-use' as const;
+const DEFAULT_HYPERBROWSER_MODEL = process.env.NEXT_PUBLIC_HYPERBROWSER_MODEL || 'gemini-2.5-flash';
+const DEFAULT_BROWSER_USE_CLOUD_MODEL = process.env.NEXT_PUBLIC_BROWSER_USE_CLOUD_MODEL || 'browser-use-llm';
 
 const defaultSettings: QASettings = {
   aiModel: DEFAULT_AI_MODEL,
@@ -21,6 +26,10 @@ const defaultSettings: QASettings = {
   parallelLimit: 3,
   browserProfile: 'standard',
   proxyEnabled: false,
+  browserProvider: DEFAULT_BROWSER_PROVIDER,
+  hyperbrowserModel: DEFAULT_HYPERBROWSER_MODEL,
+  browserUseCloudModel: DEFAULT_BROWSER_USE_CLOUD_MODEL,
+  providerApiKeys: {},
 };
 
 const initialState: QAState = {
@@ -28,6 +37,8 @@ const initialState: QAState = {
   currentProjectId: null,
   testCases: {},
   testRuns: {},
+  testGroups: {},
+  userAccounts: {},
   settings: defaultSettings,
   activeTestRun: null,
   lastUpdated: null,
@@ -42,6 +53,8 @@ function reducer(state: QAState, action: QAAction): QAState {
         projects: [...state.projects, action.payload],
         testCases: { ...state.testCases, [action.payload.id]: [] },
         testRuns: { ...state.testRuns, [action.payload.id]: [] },
+        testGroups: { ...state.testGroups, [action.payload.id]: [] },
+        userAccounts: { ...state.userAccounts, [action.payload.id]: [] },
         lastUpdated: Date.now(),
       };
 
@@ -57,13 +70,19 @@ function reducer(state: QAState, action: QAAction): QAState {
     case 'DELETE_PROJECT': {
       const { [action.payload]: removedTests, ...remainingTests } = state.testCases;
       const { [action.payload]: removedRuns, ...remainingRuns } = state.testRuns;
+      const { [action.payload]: removedGroups, ...remainingGroups } = state.testGroups;
+      const { [action.payload]: removedAccounts, ...remainingAccounts } = state.userAccounts;
       void removedTests;
       void removedRuns;
+      void removedGroups;
+      void removedAccounts;
       return {
         ...state,
         projects: state.projects.filter((p) => p.id !== action.payload),
         testCases: remainingTests,
         testRuns: remainingRuns,
+        testGroups: remainingGroups,
+        userAccounts: remainingAccounts,
         currentProjectId: state.currentProjectId === action.payload ? null : state.currentProjectId,
         lastUpdated: Date.now(),
       };
@@ -127,15 +146,106 @@ function reducer(state: QAState, action: QAAction): QAState {
       const { id, projectId } = action.payload;
       const tests = state.testCases[projectId] || [];
       const newTests = tests.filter((t) => t.id !== id);
+      // Remove deleted test from any groups that contain it
+      const updatedGroups = { ...state.testGroups };
+      if (updatedGroups[projectId]) {
+        updatedGroups[projectId] = updatedGroups[projectId].map((group) => {
+          if (group.testCaseIds.includes(id)) {
+            return { ...group, testCaseIds: group.testCaseIds.filter((tid) => tid !== id) };
+          }
+          return group;
+        });
+      }
       return {
         ...state,
         testCases: {
           ...state.testCases,
           [projectId]: newTests,
         },
+        testGroups: updatedGroups,
         projects: state.projects.map((p) =>
           p.id === projectId ? { ...p, testCount: newTests.length } : p
         ),
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'CREATE_TEST_GROUP': {
+      const projectId = action.payload.projectId;
+      const existingGroups = state.testGroups[projectId] || [];
+      return {
+        ...state,
+        testGroups: {
+          ...state.testGroups,
+          [projectId]: [...existingGroups, action.payload],
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'UPDATE_TEST_GROUP': {
+      const { id, projectId, updates } = action.payload;
+      const groups = state.testGroups[projectId] || [];
+      return {
+        ...state,
+        testGroups: {
+          ...state.testGroups,
+          [projectId]: groups.map((g) =>
+            g.id === id ? { ...g, ...updates } : g
+          ),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'DELETE_TEST_GROUP': {
+      const { id, projectId } = action.payload;
+      const groups = state.testGroups[projectId] || [];
+      return {
+        ...state,
+        testGroups: {
+          ...state.testGroups,
+          [projectId]: groups.filter((g) => g.id !== id),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'CREATE_USER_ACCOUNT': {
+      const projectId = action.payload.projectId;
+      const existing = state.userAccounts[projectId] || [];
+      if (existing.length >= 20) return state;
+      return {
+        ...state,
+        userAccounts: { ...state.userAccounts, [projectId]: [...existing, action.payload] },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'UPDATE_USER_ACCOUNT': {
+      const { id, projectId, updates } = action.payload;
+      const accounts = state.userAccounts[projectId] || [];
+      return {
+        ...state,
+        userAccounts: {
+          ...state.userAccounts,
+          [projectId]: accounts.map((a) => a.id === id ? { ...a, ...updates } : a),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'DELETE_USER_ACCOUNT': {
+      const { id, projectId } = action.payload;
+      const accounts = state.userAccounts[projectId] || [];
+      const tests = state.testCases[projectId] || [];
+      return {
+        ...state,
+        userAccounts: { ...state.userAccounts, [projectId]: accounts.filter(a => a.id !== id) },
+        testCases: {
+          ...state.testCases,
+          [projectId]: tests.map(tc => tc.userAccountId === id ? { ...tc, userAccountId: undefined } : tc),
+        },
         lastUpdated: Date.now(),
       };
     }
@@ -226,6 +336,23 @@ function reducer(state: QAState, action: QAAction): QAState {
         });
       }
 
+      // Update group statuses based on completed run results
+      const updatedGroupsAfterRun = { ...state.testGroups };
+      if (updatedGroupsAfterRun[projectId]) {
+        const completedTestIds = new Set(completedRun.results.map((r) => r.testCaseId));
+        updatedGroupsAfterRun[projectId] = updatedGroupsAfterRun[projectId].map((group) => {
+          const groupTestsRun = group.testCaseIds.filter((id) => completedTestIds.has(id));
+          if (groupTestsRun.length === 0) return group;
+          const groupResults = completedRun.results.filter((r) => group.testCaseIds.includes(r.testCaseId));
+          const anyFailed = groupResults.some((r) => r.status === 'failed' || r.status === 'error');
+          return {
+            ...group,
+            lastRunAt: Date.now(),
+            lastRunStatus: anyFailed ? 'failed' as const : 'passed' as const,
+          };
+        });
+      }
+
       return {
         ...state,
         activeTestRun: null,
@@ -234,8 +361,274 @@ function reducer(state: QAState, action: QAAction): QAState {
           [projectId]: [completedRun, ...existingRuns].slice(0, 50),
         },
         testCases: updatedTestCases,
+        testGroups: updatedGroupsAfterRun,
         projects: state.projects.map((p) =>
           p.id === projectId ? { ...p, lastRunStatus, lastRunAt: Date.now() } : p
+        ),
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'DELETE_TEST_RESULT': {
+      const { runId, projectId, resultId } = action.payload;
+      // Guard: don't mutate a currently-running run
+      if (state.activeTestRun?.id === runId) return state;
+
+      const projectRuns = state.testRuns[projectId] || [];
+      const targetRun = projectRuns.find((r) => r.id === runId);
+      if (!targetRun) return state;
+      const deletedResult = targetRun.results.find((r) => r.id === resultId);
+      if (!deletedResult) return state;
+
+      const deletedResultIds = new Set<string>([deletedResult.id]);
+
+      const remainingRuns: TestRun[] = [];
+      for (const run of projectRuns) {
+        if (run.id !== runId) {
+          remainingRuns.push(run);
+          continue;
+        }
+
+        const newResults = run.results.filter((r) => r.id !== resultId);
+        if (newResults.length === 0) {
+          // Drop empty runs
+          continue;
+        }
+
+        const passed = newResults.filter((r) => r.status === 'passed').length;
+        const failed = newResults.filter((r) => r.status === 'failed' || r.status === 'error').length;
+        const skipped = newResults.filter((r) => r.status === 'skipped').length;
+
+        remainingRuns.push({
+          ...run,
+          results: newResults,
+          totalTests: newResults.length,
+          passed,
+          failed,
+          skipped,
+        });
+      }
+
+      // Clean up lastRunResult on test cases
+      const updatedTestCases = { ...state.testCases };
+      if (updatedTestCases[projectId]) {
+        updatedTestCases[projectId] = updatedTestCases[projectId].map((tc) => {
+          if (tc.lastRunResult && deletedResultIds.has(tc.lastRunResult.id)) {
+            // Find the next most recent result for this test case from remaining runs
+            let replacement: TestResult | undefined;
+            for (const run of remainingRuns) {
+              for (const result of run.results) {
+                if (result.testCaseId === tc.id) {
+                  if (!replacement || (result.startedAt || 0) > (replacement.startedAt || 0)) {
+                    replacement = result;
+                  }
+                }
+              }
+            }
+            return {
+              ...tc,
+              lastRunResult: replacement,
+              status: replacement
+                ? (replacement.status === 'passed' ? 'passed' : replacement.status === 'failed' ? 'failed' : 'pending')
+                : 'pending',
+            } as TestCase;
+          }
+          return tc;
+        });
+      }
+
+      // Recalculate project lastRunStatus
+      let projectLastRunStatus: 'passed' | 'failed' | 'never_run' = 'never_run';
+      let projectLastRunAt: number | undefined;
+      if (remainingRuns.length > 0) {
+        const mostRecentRun = remainingRuns[0]; // runs are stored newest-first
+        projectLastRunStatus = mostRecentRun.failed > 0 ? 'failed' : 'passed';
+        projectLastRunAt = mostRecentRun.completedAt || mostRecentRun.startedAt;
+      }
+
+      // Recalculate group statuses
+      const updatedGroups = { ...state.testGroups };
+      if (updatedGroups[projectId]) {
+        updatedGroups[projectId] = updatedGroups[projectId].map((group) => {
+          // Find the most recent result for any test in this group across remaining runs
+          let latestGroupTime: number | undefined;
+          let anyFailed = false;
+          let hasResults = false;
+          for (const run of remainingRuns) {
+            for (const result of run.results) {
+              if (group.testCaseIds.includes(result.testCaseId)) {
+                hasResults = true;
+                const resultTime = result.completedAt || result.startedAt || 0;
+                if (!latestGroupTime || resultTime > latestGroupTime) {
+                  latestGroupTime = resultTime;
+                }
+                if (result.status === 'failed' || result.status === 'error') {
+                  anyFailed = true;
+                }
+              }
+            }
+          }
+          if (!hasResults) {
+            return { ...group, lastRunStatus: 'never_run' as const, lastRunAt: undefined };
+          }
+          return {
+            ...group,
+            lastRunStatus: anyFailed ? 'failed' as const : 'passed' as const,
+            lastRunAt: latestGroupTime,
+          };
+        });
+      }
+
+      return {
+        ...state,
+        testRuns: { ...state.testRuns, [projectId]: remainingRuns },
+        testCases: updatedTestCases,
+        testGroups: updatedGroups,
+        projects: state.projects.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                lastRunStatus: projectLastRunStatus,
+                lastRunAt: projectLastRunAt,
+              }
+            : p
+        ),
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'DELETE_TEST_RUN': {
+      const { runId, projectId } = action.payload;
+      // Guard: don't delete a currently-running run
+      if (state.activeTestRun?.id === runId) return state;
+
+      const projectRuns = state.testRuns[projectId] || [];
+      const deletedRun = projectRuns.find(r => r.id === runId);
+      if (!deletedRun) return state;
+
+      const deletedResultIds = new Set(deletedRun.results.map(r => r.id));
+      const remainingRuns = projectRuns.filter(r => r.id !== runId);
+
+      // Clean up lastRunResult on test cases
+      const updatedTestCases = { ...state.testCases };
+      if (updatedTestCases[projectId]) {
+        updatedTestCases[projectId] = updatedTestCases[projectId].map(tc => {
+          if (tc.lastRunResult && deletedResultIds.has(tc.lastRunResult.id)) {
+            // Find the next most recent result for this test case from remaining runs
+            let replacement: TestResult | undefined;
+            for (const run of remainingRuns) {
+              for (const result of run.results) {
+                if (result.testCaseId === tc.id) {
+                  if (!replacement || (result.startedAt || 0) > (replacement.startedAt || 0)) {
+                    replacement = result;
+                  }
+                }
+              }
+            }
+            return {
+              ...tc,
+              lastRunResult: replacement,
+              status: replacement
+                ? (replacement.status === 'passed' ? 'passed' : replacement.status === 'failed' ? 'failed' : 'pending')
+                : 'pending',
+            } as TestCase;
+          }
+          return tc;
+        });
+      }
+
+      // Recalculate project lastRunStatus
+      let projectLastRunStatus: 'passed' | 'failed' | 'never_run' = 'never_run';
+      let projectLastRunAt: number | undefined;
+      if (remainingRuns.length > 0) {
+        const mostRecentRun = remainingRuns[0]; // runs are stored newest-first
+        projectLastRunStatus = mostRecentRun.failed > 0 ? 'failed' : 'passed';
+        projectLastRunAt = mostRecentRun.completedAt || mostRecentRun.startedAt;
+      }
+
+      // Recalculate group statuses
+      const updatedGroups = { ...state.testGroups };
+      if (updatedGroups[projectId]) {
+        updatedGroups[projectId] = updatedGroups[projectId].map(group => {
+          // Find the most recent result for any test in this group across remaining runs
+          let latestGroupTime: number | undefined;
+          let anyFailed = false;
+          let hasResults = false;
+          for (const run of remainingRuns) {
+            for (const result of run.results) {
+              if (group.testCaseIds.includes(result.testCaseId)) {
+                hasResults = true;
+                const resultTime = result.completedAt || result.startedAt || 0;
+                if (!latestGroupTime || resultTime > latestGroupTime) {
+                  latestGroupTime = resultTime;
+                }
+                if (result.status === 'failed' || result.status === 'error') {
+                  anyFailed = true;
+                }
+              }
+            }
+          }
+          if (!hasResults) {
+            return { ...group, lastRunStatus: 'never_run' as const, lastRunAt: undefined };
+          }
+          return {
+            ...group,
+            lastRunStatus: anyFailed ? 'failed' as const : 'passed' as const,
+            lastRunAt: latestGroupTime,
+          };
+        });
+      }
+
+      return {
+        ...state,
+        testRuns: { ...state.testRuns, [projectId]: remainingRuns },
+        testCases: updatedTestCases,
+        testGroups: updatedGroups,
+        projects: state.projects.map(p =>
+          p.id === projectId
+            ? {
+                ...p,
+                lastRunStatus: projectLastRunStatus,
+                lastRunAt: projectLastRunAt,
+              }
+            : p
+        ),
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'CLEAR_TEST_RUNS': {
+      const { projectId } = action.payload;
+
+      // Clear all lastRunResult and reset status on test cases
+      const clearedTestCases = { ...state.testCases };
+      if (clearedTestCases[projectId]) {
+        clearedTestCases[projectId] = clearedTestCases[projectId].map(tc => ({
+          ...tc,
+          lastRunResult: undefined,
+          status: 'pending' as const,
+        }));
+      }
+
+      // Reset all groups
+      const clearedGroups = { ...state.testGroups };
+      if (clearedGroups[projectId]) {
+        clearedGroups[projectId] = clearedGroups[projectId].map(group => ({
+          ...group,
+          lastRunStatus: 'never_run' as const,
+          lastRunAt: undefined,
+        }));
+      }
+
+      return {
+        ...state,
+        testRuns: { ...state.testRuns, [projectId]: [] },
+        testCases: clearedTestCases,
+        testGroups: clearedGroups,
+        projects: state.projects.map(p =>
+          p.id === projectId
+            ? { ...p, lastRunStatus: 'never_run' as const, lastRunAt: undefined }
+            : p
         ),
         lastUpdated: Date.now(),
       };
@@ -251,6 +644,8 @@ function reducer(state: QAState, action: QAAction): QAState {
     case 'LOAD_STATE':
       return {
         ...action.payload,
+        testGroups: action.payload.testGroups || {},
+        userAccounts: action.payload.userAccounts || {},
         isFirstLoad: false,
       };
 
@@ -280,14 +675,27 @@ interface QAContextType {
   deleteProject: (id: string) => void;
   setCurrentProject: (id: string | null) => void;
   // Test case actions
-  createTestCase: (projectId: string, title: string, description: string, expectedOutcome: string) => TestCase;
+  createTestCase: (projectId: string, title: string, description: string, expectedOutcome: string, userAccountId?: string) => TestCase;
   createTestCasesBulk: (projectId: string, tests: GeneratedTest[]) => TestCase[];
   updateTestCase: (id: string, projectId: string, updates: Partial<TestCase>) => void;
   deleteTestCase: (id: string, projectId: string) => void;
+  // Test group actions
+  createTestGroup: (projectId: string, name: string, testCaseIds: string[]) => TestGroup;
+  updateTestGroup: (id: string, projectId: string, updates: Partial<TestGroup>) => void;
+  deleteTestGroup: (id: string, projectId: string) => void;
+  getTestGroupsForProject: (projectId: string) => TestGroup[];
+  // User account actions
+  createUserAccount: (projectId: string, label: string, email: string, password: string, metadata?: Record<string, string>) => UserAccount;
+  updateUserAccount: (id: string, projectId: string, updates: Partial<UserAccount>) => void;
+  deleteUserAccount: (id: string, projectId: string) => void;
+  getUserAccountsForProject: (projectId: string) => UserAccount[];
   // Test run actions
   startTestRun: (projectId: string, testCaseIds: string[]) => TestRun;
   updateTestResult: (runId: string, result: TestResult) => void;
   completeTestRun: (runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => void;
+  deleteTestResult: (runId: string, projectId: string, resultId: string) => void;
+  deleteTestRun: (runId: string, projectId: string) => void;
+  clearTestRuns: (projectId: string) => void;
   // Settings
   updateSettings: (settings: Partial<QASettings>) => void;
   // Helpers
@@ -299,44 +707,64 @@ interface QAContextType {
 
 const QAContext = createContext<QAContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'qa-tester-state';
-
 export function QAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Load state from localStorage on mount
+  // Load shared team state from server on mount
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (!parsed.settings) {
-            parsed.settings = defaultSettings;
-          } else if (!parsed.settings.aiModel) {
-            // Backfill aiModel for state saved before this field existed
-            parsed.settings.aiModel = DEFAULT_AI_MODEL;
-          }
-          dispatch({ type: 'LOAD_STATE', payload: parsed });
-        } catch (e) {
-          console.error('Failed to load saved state:', e);
+    let isCancelled = false;
+
+    const load = async () => {
+      try {
+        const response = await fetch('/api/state', { method: 'GET' });
+        if (!response.ok) {
+          throw new Error(`Failed to load state: ${response.status}`);
         }
-      } else {
+
+        const payload = await response.json();
+        if (!isCancelled && payload?.state) {
+          dispatch({ type: 'LOAD_STATE', payload: payload.state as QAState });
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to load shared state:', error);
+      }
+
+      if (!isCancelled) {
         dispatch({ type: 'SET_FIRST_LOAD', payload: false });
       }
-    }
+    };
+
+    void load();
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
-  // Save state to localStorage on change (debounced)
+  // Save shared team state to server on change (debounced)
   useEffect(() => {
-    if (typeof window !== 'undefined' && state.lastUpdated && !state.isFirstLoad) {
-      // Debounce saves to avoid excessive writes
-      const saveTimeout = setTimeout(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      }, 300);
-      
-      return () => clearTimeout(saveTimeout);
-    }
+    if (!state.lastUpdated || state.isFirstLoad) return;
+
+    const saveTimeout = setTimeout(() => {
+      const stateForSync: QAState = {
+        ...state,
+        isFirstLoad: false,
+        settings: {
+          ...state.settings,
+          providerApiKeys: {},
+        },
+      };
+
+      void fetch('/api/state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: stateForSync }),
+      }).catch((error) => {
+        console.error('Failed to persist shared state:', error);
+      });
+    }, 350);
+
+    return () => clearTimeout(saveTimeout);
   }, [state]);
 
   // Project actions
@@ -371,7 +799,8 @@ export function QAProvider({ children }: { children: ReactNode }) {
     projectId: string,
     title: string,
     description: string,
-    expectedOutcome: string
+    expectedOutcome: string,
+    userAccountId?: string
   ): TestCase => {
     const testCase: TestCase = {
       id: generateId(),
@@ -381,6 +810,7 @@ export function QAProvider({ children }: { children: ReactNode }) {
       expectedOutcome,
       status: 'pending',
       createdAt: Date.now(),
+      userAccountId,
     };
     dispatch({ type: 'CREATE_TEST_CASE', payload: testCase });
     return testCase;
@@ -413,6 +843,66 @@ export function QAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'DELETE_TEST_CASE', payload: { id, projectId } });
   }, []);
 
+  // Test group actions
+  const createTestGroup = useCallback((projectId: string, name: string, testCaseIds: string[]): TestGroup => {
+    const group: TestGroup = {
+      id: generateId(),
+      projectId,
+      name,
+      testCaseIds,
+      createdAt: Date.now(),
+      lastRunStatus: 'never_run',
+    };
+    dispatch({ type: 'CREATE_TEST_GROUP', payload: group });
+    return group;
+  }, []);
+
+  const updateTestGroup = useCallback((id: string, projectId: string, updates: Partial<TestGroup>) => {
+    dispatch({ type: 'UPDATE_TEST_GROUP', payload: { id, projectId, updates } });
+  }, []);
+
+  const deleteTestGroup = useCallback((id: string, projectId: string) => {
+    dispatch({ type: 'DELETE_TEST_GROUP', payload: { id, projectId } });
+  }, []);
+
+  const getTestGroupsForProject = useCallback((projectId: string): TestGroup[] => {
+    return state.testGroups[projectId] || [];
+  }, [state.testGroups]);
+
+  // User account actions
+  const createUserAccount = useCallback((
+    projectId: string,
+    label: string,
+    email: string,
+    password: string,
+    metadata?: Record<string, string>
+  ): UserAccount => {
+    const account: UserAccount = {
+      id: generateId(),
+      projectId,
+      label,
+      email,
+      password,
+      metadata,
+      createdAt: Date.now(),
+      providerProfiles: {},
+    };
+    dispatch({ type: 'CREATE_USER_ACCOUNT', payload: account });
+    return account;
+  }, []);
+
+  const updateUserAccount = useCallback((id: string, projectId: string, updates: Partial<UserAccount>) => {
+    dispatch({ type: 'UPDATE_USER_ACCOUNT', payload: { id, projectId, updates } });
+  }, []);
+
+  const deleteUserAccount = useCallback((id: string, projectId: string) => {
+    dispatch({ type: 'DELETE_USER_ACCOUNT', payload: { id, projectId } });
+  }, []);
+
+  const getUserAccountsForProject = useCallback((projectId: string): UserAccount[] => {
+    return state.userAccounts[projectId] || [];
+  }, [state.userAccounts]);
+
   // Test run actions
   const startTestRun = useCallback((projectId: string, testCaseIds: string[]): TestRun => {
     const run: TestRun = {
@@ -436,6 +926,18 @@ export function QAProvider({ children }: { children: ReactNode }) {
 
   const completeTestRun = useCallback((runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => {
     dispatch({ type: 'COMPLETE_TEST_RUN', payload: { runId, status, finalResults } });
+  }, []);
+
+  const deleteTestResult = useCallback((runId: string, projectId: string, resultId: string) => {
+    dispatch({ type: 'DELETE_TEST_RESULT', payload: { runId, projectId, resultId } });
+  }, []);
+
+  const deleteTestRun = useCallback((runId: string, projectId: string) => {
+    dispatch({ type: 'DELETE_TEST_RUN', payload: { runId, projectId } });
+  }, []);
+
+  const clearTestRuns = useCallback((projectId: string) => {
+    dispatch({ type: 'CLEAR_TEST_RUNS', payload: { projectId } });
   }, []);
 
   // Settings
@@ -472,9 +974,20 @@ export function QAProvider({ children }: { children: ReactNode }) {
     createTestCasesBulk,
     updateTestCase,
     deleteTestCase,
+    createTestGroup,
+    updateTestGroup,
+    deleteTestGroup,
+    getTestGroupsForProject,
+    createUserAccount,
+    updateUserAccount,
+    deleteUserAccount,
+    getUserAccountsForProject,
     startTestRun,
     updateTestResult,
     completeTestRun,
+    deleteTestResult,
+    deleteTestRun,
+    clearTestRuns,
     updateSettings,
     getCurrentProject,
     getTestCasesForProject,

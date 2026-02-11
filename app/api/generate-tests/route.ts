@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai-client';
+import { enforceRateLimit } from '@/lib/security/rate-limit';
+import { handleRouteError } from '@/lib/server/route-utils';
+import { requireTeamContext } from '@/lib/server/team-context';
 
 // Schema for generated tests
 const generatedTestSchema = z.object({
@@ -16,6 +19,9 @@ const bulkGenerateSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    const team = await requireTeamContext();
+    enforceRateLimit(`generate-tests:${team.userId}`, { limit: 20, windowMs: 60_000 });
+
     const { rawText, websiteUrl, aiModel } = await request.json();
 
     if (!rawText || !websiteUrl) {
@@ -95,10 +101,6 @@ Generate a list of test cases based on this input. Cover the main functionality,
 
     return NextResponse.json({ testCases: validated.testCases });
   } catch (error) {
-    console.error('Error generating tests:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to generate tests' },
-      { status: 500 }
-    );
+    return handleRouteError(error, 'Failed to generate tests');
   }
 }

@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseTestDescription } from '@/lib/ai-client';
+import { enforceRateLimit } from '@/lib/security/rate-limit';
+import { handleRouteError } from '@/lib/server/route-utils';
+import { requireTeamContext } from '@/lib/server/team-context';
 
 export async function POST(request: NextRequest) {
   try {
+    const team = await requireTeamContext();
+    enforceRateLimit(`parse-test:${team.userId}`, { limit: 40, windowMs: 60_000 });
+
     const { plainEnglish, websiteUrl, aiModel } = await request.json();
 
     if (!plainEnglish || !websiteUrl) {
@@ -30,10 +36,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error('Error parsing test description:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to parse test description' },
-      { status: 500 }
-    );
+    return handleRouteError(error, 'Failed to parse test description');
   }
 }

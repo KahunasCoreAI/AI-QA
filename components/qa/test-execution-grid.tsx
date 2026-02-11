@@ -1,11 +1,11 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CheckCircle2, XCircle, Loader2, Clock, ExternalLink, SkipForward } from 'lucide-react';
-import type { TestCase, TestResult } from '@/types';
+import { Badge } from '@/components/ui/badge';
+import { CheckCircle2, XCircle, Loader2, Clock, ExternalLink, SkipForward, User } from 'lucide-react';
+import type { TestCase, TestResult, UserAccount } from '@/types';
 import { cn, formatDuration } from '@/lib/utils';
 import { useElapsedTime } from '@/lib/hooks';
 
@@ -13,11 +13,14 @@ interface TestExecutionCardProps {
   testCase: TestCase;
   result?: TestResult;
   onSkip?: () => void;
+  userAccount?: UserAccount;
 }
 
-function TestExecutionCard({ testCase, result, onSkip }: TestExecutionCardProps) {
+function TestExecutionCard({ testCase, result, onSkip, userAccount }: TestExecutionCardProps) {
   const isRunning = result?.status === 'running' || (!result && testCase.status === 'running');
   const elapsed = useElapsedTime(result?.startedAt || null, isRunning);
+  const previewUrl = isRunning ? result?.streamingUrl : undefined;
+  const externalViewUrl = result?.recordingUrl || (isRunning ? result?.streamingUrl : undefined);
 
   const getStatusIcon = () => {
     if (!result) {
@@ -53,10 +56,6 @@ function TestExecutionCard({ testCase, result, onSkip }: TestExecutionCardProps)
     }
   };
 
-  const progress = result?.currentStep && result?.totalSteps
-    ? (result.currentStep / result.totalSteps) * 100
-    : 0;
-
   return (
     <Card className={cn('relative overflow-hidden rounded-md', getStatusBorderClass())}>
       <div className="p-3 pb-2">
@@ -65,15 +64,26 @@ function TestExecutionCard({ testCase, result, onSkip }: TestExecutionCardProps)
           <span className="text-[13px] font-medium truncate">
             {testCase.title}
           </span>
+          {userAccount && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 gap-0.5">
+              <User className="h-2.5 w-2.5" />
+              {userAccount.label}
+            </Badge>
+          )}
         </div>
       </div>
 
       <div className="px-3 pb-3 space-y-2.5">
         {/* Browser Preview */}
-        <div className="browser-preview aspect-video bg-black rounded overflow-hidden relative">
-          {result?.streamingUrl ? (
+        <div
+          className={cn(
+            'browser-preview bg-black rounded overflow-hidden relative',
+            isRunning ? 'aspect-square' : 'aspect-video'
+          )}
+        >
+          {previewUrl ? (
             <iframe
-              src={result.streamingUrl}
+              src={previewUrl}
               className="w-full h-full border-0"
               sandbox="allow-scripts allow-same-origin"
             />
@@ -100,13 +110,15 @@ function TestExecutionCard({ testCase, result, onSkip }: TestExecutionCardProps)
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
               <span className="truncate">
-                {result?.currentStepDescription || 'Starting...'}
-              </span>
-              <span className="flex-shrink-0 ml-2">
-                {result?.currentStep || 0}/{result?.totalSteps || '?'}
+                {result?.currentStepDescription || 'Browser agent executing test...'}
               </span>
             </div>
-            <Progress value={progress} className="h-[3px]" />
+            <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-muted/40">
+              <div
+                className="absolute inset-y-0 w-1/3 rounded-full bg-[#f5a623]/80"
+                style={{ animation: 'indeterminate-slide 1.2s ease-in-out infinite' }}
+              />
+            </div>
           </div>
         )}
 
@@ -142,15 +154,15 @@ function TestExecutionCard({ testCase, result, onSkip }: TestExecutionCardProps)
 
         {/* Actions row */}
         <div className="flex items-center justify-between">
-          {result?.streamingUrl && (
+          {externalViewUrl && (
             <a
-              href={result.streamingUrl}
+              href={externalViewUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-[11px] text-primary/70 hover:text-primary transition-colors"
             >
               <ExternalLink className="h-3 w-3" />
-              Open in new tab
+              {result?.recordingUrl ? 'View recording' : 'Open live browser'}
             </a>
           )}
 
@@ -176,6 +188,7 @@ interface TestExecutionGridProps {
   results: Map<string, TestResult>;
   isRunning: boolean;
   onSkipTest?: (testCaseId: string) => void;
+  userAccounts?: UserAccount[];
 }
 
 export function TestExecutionGrid({
@@ -183,6 +196,7 @@ export function TestExecutionGrid({
   results,
   isRunning,
   onSkipTest,
+  userAccounts = [],
 }: TestExecutionGridProps) {
   if (testCases.length === 0) {
     return (
@@ -194,14 +208,18 @@ export function TestExecutionGrid({
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      {testCases.map((tc) => (
-        <TestExecutionCard
-          key={tc.id}
-          testCase={tc}
-          result={results.get(tc.id)}
-          onSkip={onSkipTest ? () => onSkipTest(tc.id) : undefined}
-        />
-      ))}
+      {testCases.map((tc) => {
+        const account = userAccounts.find(a => a.id === tc.userAccountId);
+        return (
+          <TestExecutionCard
+            key={tc.id}
+            testCase={tc}
+            result={results.get(tc.id)}
+            onSkip={onSkipTest ? () => onSkipTest(tc.id) : undefined}
+            userAccount={account}
+          />
+        );
+      })}
 
       {isRunning && testCases.length < 3 && (
         Array.from({ length: 3 - testCases.length }).map((_, i) => (

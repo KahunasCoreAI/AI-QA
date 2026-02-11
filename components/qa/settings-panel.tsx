@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertTriangle, Trash2 } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import type { QASettings } from '@/types';
 
 const PRESET_MODELS = [
@@ -22,6 +23,12 @@ const PRESET_MODELS = [
   { value: 'anthropic/claude-opus-4.6', label: 'Claude Opus 4.6' },
   { value: 'anthropic/claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
   { value: 'google/gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
+] as const;
+
+const BROWSER_PROVIDERS = [
+  { value: 'hyperbrowser-browser-use', label: 'Hyperbrowser Browser-Use' },
+  { value: 'hyperbrowser-hyperagent', label: 'Hyperbrowser HyperAgent' },
+  { value: 'browser-use-cloud', label: 'BrowserUse Cloud' },
 ] as const;
 
 interface SettingsPanelProps {
@@ -37,9 +44,119 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const isPreset = PRESET_MODELS.some((m) => m.value === settings.aiModel);
   const [useCustomModel, setUseCustomModel] = useState(!isPreset);
+  const [hyperbrowserApiKey, setHyperbrowserApiKey] = useState('');
+  const [browserUseCloudApiKey, setBrowserUseCloudApiKey] = useState('');
+  const [providerKeyStatus, setProviderKeyStatus] = useState({
+    hyperbrowserConfigured: false,
+    browserUseCloudConfigured: false,
+  });
+  const [isSavingProviderKeys, setIsSavingProviderKeys] = useState(false);
+  const [providerKeyMessage, setProviderKeyMessage] = useState<string | null>(null);
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const themeValue = theme ?? 'system';
+  const resolvedThemeValue = resolvedTheme;
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadProviderKeyStatus = async () => {
+      try {
+        const response = await fetch('/api/settings/provider-keys');
+        if (!response.ok) return;
+        const result = await response.json();
+        if (!isCancelled) {
+          setProviderKeyStatus({
+            hyperbrowserConfigured: Boolean(result.hyperbrowserConfigured),
+            browserUseCloudConfigured: Boolean(result.browserUseCloudConfigured),
+          });
+        }
+      } catch {
+        // Best-effort status display only.
+      }
+    };
+
+    void loadProviderKeyStatus();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const handleSaveProviderKeys = async () => {
+    const trimmedHyperbrowser = hyperbrowserApiKey.trim();
+    const trimmedBrowserUse = browserUseCloudApiKey.trim();
+
+    if (!trimmedHyperbrowser && !trimmedBrowserUse) {
+      setProviderKeyMessage('Enter at least one key before saving.');
+      return;
+    }
+
+    setIsSavingProviderKeys(true);
+    setProviderKeyMessage(null);
+    try {
+      const response = await fetch('/api/settings/provider-keys', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(trimmedHyperbrowser ? { hyperbrowser: trimmedHyperbrowser } : {}),
+          ...(trimmedBrowserUse ? { browserUseCloud: trimmedBrowserUse } : {}),
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || `Failed to save keys (${response.status})`);
+      }
+
+      const result = await response.json();
+      setProviderKeyStatus({
+        hyperbrowserConfigured: Boolean(result.hyperbrowserConfigured),
+        browserUseCloudConfigured: Boolean(result.browserUseCloudConfigured),
+      });
+      setHyperbrowserApiKey('');
+      setBrowserUseCloudApiKey('');
+      setProviderKeyMessage('Provider keys updated.');
+    } catch (error) {
+      setProviderKeyMessage(error instanceof Error ? error.message : 'Failed to save provider keys.');
+    } finally {
+      setIsSavingProviderKeys(false);
+    }
+  };
 
   return (
     <div className="space-y-4 max-w-2xl">
+      {/* Appearance */}
+      <Card className="border-border/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold tracking-tight">Appearance</CardTitle>
+          <CardDescription className="text-xs">
+            Choose how the dashboard looks. System follows your OS appearance.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1.5" suppressHydrationWarning>
+            <Label htmlFor="theme" className="text-xs font-medium">Theme</Label>
+            <Select
+              value={themeValue}
+              onValueChange={(v) => setTheme(v)}
+            >
+              <SelectTrigger id="theme" className="h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="system">System</SelectItem>
+                <SelectItem value="light">Light</SelectItem>
+                <SelectItem value="dark">Dark</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground/60">
+              {themeValue === 'system' && resolvedThemeValue
+                ? `System currently: ${resolvedThemeValue}`
+                : 'Saved per browser on this device.'}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* AI Model Settings */}
       <Card className="border-border/40">
         <CardHeader className="pb-3">
@@ -171,6 +288,111 @@ export function SettingsPanel({
               </p>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Browser Provider */}
+      <Card className="border-border/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold tracking-tight">Browser Provider</CardTitle>
+          <CardDescription className="text-xs">
+            Choose which browser automation backend runs tests and account login sessions.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="browserProvider" className="text-xs font-medium">Provider</Label>
+            <Select
+              value={settings.browserProvider}
+              onValueChange={(v) => onSettingsChange({ browserProvider: v as QASettings['browserProvider'] })}
+            >
+              <SelectTrigger id="browserProvider" className="h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BROWSER_PROVIDERS.map((provider) => (
+                  <SelectItem key={provider.value} value={provider.value}>
+                    {provider.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="hyperbrowserModel" className="text-xs font-medium">Hyperbrowser Model</Label>
+            <Input
+              id="hyperbrowserModel"
+              type="text"
+              value={settings.hyperbrowserModel}
+              onChange={(e) => onSettingsChange({ hyperbrowserModel: e.target.value })}
+              className="h-8 text-sm font-mono"
+              placeholder="e.g. gemini-2.5-flash"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="browserUseCloudModel" className="text-xs font-medium">BrowserUse Cloud Model</Label>
+            <Input
+              id="browserUseCloudModel"
+              type="text"
+              value={settings.browserUseCloudModel}
+              onChange={(e) => onSettingsChange({ browserUseCloudModel: e.target.value })}
+              className="h-8 text-sm font-mono"
+              placeholder="e.g. browser-use-llm or browser-use-2.0"
+            />
+            <p className="text-[11px] text-muted-foreground/60">
+              Each provider uses its own model field; `BROWSER_USE_1.0` is accepted and normalized automatically.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="hyperbrowserApiKey" className="text-xs font-medium">Hyperbrowser API Key</Label>
+            <Input
+              id="hyperbrowserApiKey"
+              type="password"
+              value={hyperbrowserApiKey}
+              onChange={(e) => setHyperbrowserApiKey(e.target.value)}
+              className="h-8 text-sm font-mono"
+              placeholder={providerKeyStatus.hyperbrowserConfigured ? 'Configured (enter to replace)' : 'hb_...'}
+            />
+            <p className="text-[11px] text-muted-foreground/60">
+              {providerKeyStatus.hyperbrowserConfigured ? 'Key configured.' : 'No key configured yet.'}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="browserUseCloudApiKey" className="text-xs font-medium">BrowserUse Cloud API Key</Label>
+            <Input
+              id="browserUseCloudApiKey"
+              type="password"
+              value={browserUseCloudApiKey}
+              onChange={(e) => setBrowserUseCloudApiKey(e.target.value)}
+              className="h-8 text-sm font-mono"
+              placeholder={providerKeyStatus.browserUseCloudConfigured ? 'Configured (enter to replace)' : 'bu_...'}
+            />
+            <p className="text-[11px] text-muted-foreground/60">
+              {providerKeyStatus.browserUseCloudConfigured ? 'Key configured.' : 'No key configured yet.'}
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-muted-foreground/60">
+              Provider keys are stored server-side. Leave an input blank to keep its current value.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={handleSaveProviderKeys}
+              disabled={isSavingProviderKeys}
+            >
+              {isSavingProviderKeys ? 'Saving…' : 'Save Keys'}
+            </Button>
+          </div>
+          {providerKeyMessage && (
+            <p className="text-[11px] text-muted-foreground/80">{providerKeyMessage}</p>
+          )}
         </CardContent>
       </Card>
 

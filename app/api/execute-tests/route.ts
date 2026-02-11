@@ -1,8 +1,12 @@
 import { NextRequest } from 'next/server';
-import { runHyperbrowserAgent } from '@/lib/hyperbrowser-client';
 import { generateTestResultSummary } from '@/lib/ai-client';
-import type { TestCase, TestResult, TestEvent, QASettings } from '@/types';
+import type { QAState, TestCase, TestResult, TestEvent, QASettings } from '@/types';
 import { generateId } from '@/lib/utils';
+import { DEFAULT_BROWSER_PROVIDER, getBrowserProvider } from '@/lib/browser/providers';
+import { enforceRateLimit } from '@/lib/security/rate-limit';
+import { handleRouteError } from '@/lib/server/route-utils';
+import { requireTeamContext } from '@/lib/server/team-context';
+import { getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
 
 interface ExecuteTestsRequest {
   testCases: TestCase[];
@@ -12,7 +16,24 @@ interface ExecuteTestsRequest {
   settings?: Partial<QASettings>;
 }
 
+function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> {
+  return {
+    ...settings,
+    browserProvider: settings?.browserProvider || DEFAULT_BROWSER_PROVIDER,
+    providerApiKeys: settings?.providerApiKeys || {},
+  };
+}
+
 export async function POST(request: NextRequest) {
+  let teamContext: Awaited<ReturnType<typeof requireTeamContext>>;
+  try {
+    teamContext = await requireTeamContext();
+    enforceRateLimit(`execute-tests:${teamContext.userId}`, { limit: 20, windowMs: 60_000 });
+  } catch (error) {
+    return handleRouteError(error, 'Failed to authorize execution request');
+  }
+  const activeTeam = teamContext;
+
   const encoder = new TextEncoder();
 
   // Create a TransformStream for SSE
@@ -20,7 +41,15 @@ export async function POST(request: NextRequest) {
   const writer = stream.writable.getWriter();
   let isClosed = false;
 
-  const sendEvent = async (event: TestEvent | { type: 'all_complete'; timestamp: number; summary: { total: number; passed: number; failed: number; skipped: number; duration: number } }) => {
+  const sendEvent = async (
+    event:
+      | TestEvent
+      | {
+          type: 'all_complete';
+          timestamp: number;
+          summary: { total: number; passed: number; failed: number; skipped: number; duration: number };
+        }
+  ) => {
     if (isClosed) return;
     try {
       await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
@@ -43,7 +72,16 @@ export async function POST(request: NextRequest) {
   (async () => {
     try {
       const body: ExecuteTestsRequest = await request.json();
-      const { testCases, websiteUrl, aiModel, settings } = body;
+      const { testCases, websiteUrl, aiModel, settings: rawSettings } = body;
+      const persistedState = await getOrCreateTeamState(activeTeam.teamId);
+      const providerKeys = await getTeamProviderKeys(activeTeam.teamId);
+      const settings = normalizeSettings({
+        ...rawSettings,
+        providerApiKeys: {
+          hyperbrowser: providerKeys.hyperbrowser || undefined,
+          browserUseCloud: providerKeys.browserUseCloud || undefined,
+        },
+      });
 
       // Validate and sanitize parallelLimit to prevent infinite loops
       const parallelLimit = Math.max(1, Math.min(10, Math.floor(Number(body.parallelLimit) || 3)));
@@ -81,37 +119,107 @@ export async function POST(request: NextRequest) {
         return;
       }
 
-      const apiKey = process.env.HYPERBROWSER_API_KEY;
-      if (!apiKey) {
-        await sendEvent({
-          type: 'test_error',
-          testCaseId: 'system',
-          timestamp: Date.now(),
-          data: { error: 'HYPERBROWSER_API_KEY not configured' },
-        });
-        await closeWriter();
-        return;
-      }
-
       const startTime = Date.now();
+
+      // Build account lookup from server-side team state only.
+      const accountMap = buildAccountMapFromTeamState(testCases, persistedState, settings);
+
+      // Account-aware scheduler with round-robin for "__any__" assignments
+      const lockedAccounts = new Set<string>();
+      const allAccountIds = Array.from(accountMap.keys());
+      let roundRobinIndex = 0; // tracks next account for round-robin
       const results: TestResult[] = [];
+      const pending = [...testCases];
+      let running = 0;
 
-      // Execute tests in batches based on parallelLimit
-      const batches: TestCase[][] = [];
-      for (let i = 0; i < testCases.length; i += parallelLimit) {
-        batches.push(testCases.slice(i, i + parallelLimit));
+      // Resolve "__any__" to the next free account (round-robin)
+      function pickFreeAccount(): string | undefined {
+        if (allAccountIds.length === 0) return undefined;
+        // Try each account starting from roundRobinIndex
+        for (let i = 0; i < allAccountIds.length; i++) {
+          const idx = (roundRobinIndex + i) % allAccountIds.length;
+          const accountId = allAccountIds[idx];
+          if (!lockedAccounts.has(accountId)) {
+            roundRobinIndex = (idx + 1) % allAccountIds.length;
+            return accountId;
+          }
+        }
+        return undefined; // all accounts locked
       }
 
-      for (const batch of batches) {
-        // Execute batch in parallel
-        const batchPromises = batch.map(async (testCase) => {
-          const result = await executeTestCase(testCase, websiteUrl, apiKey, aiModel, settings, sendEvent);
-          results.push(result);
-          return result;
-        });
+      await new Promise<void>((resolve) => {
+        function trySchedule() {
+          while (running < parallelLimit && pending.length > 0) {
+            const idx = pending.findIndex((tc) => {
+              if (!tc.userAccountId) return true;
+              if (tc.userAccountId === '__any__') return pickFreeAccount() !== undefined;
+              return !lockedAccounts.has(tc.userAccountId);
+            });
+            if (idx === -1) break; // all remaining need locked accounts
 
-        await Promise.all(batchPromises);
-      }
+            const testCase = pending.splice(idx, 1)[0];
+
+            // Resolve the actual account ID to use
+            let resolvedAccountId = testCase.userAccountId;
+            if (resolvedAccountId === '__any__') {
+              resolvedAccountId = pickFreeAccount();
+            }
+
+            const credentials = resolvedAccountId ? accountMap.get(resolvedAccountId) : undefined;
+
+            if (resolvedAccountId && !credentials) {
+              const missingAccountResult: TestResult = {
+                id: generateId(),
+                testCaseId: testCase.id,
+                status: 'error',
+                startedAt: Date.now(),
+                completedAt: Date.now(),
+                error: `Assigned account '${resolvedAccountId}' was not found in shared team state.`,
+                reason: 'Assigned account was missing.',
+              };
+
+              void sendEvent({
+                type: 'test_error',
+                testCaseId: testCase.id,
+                timestamp: Date.now(),
+                data: {
+                  error: missingAccountResult.error,
+                  result: missingAccountResult,
+                },
+              });
+              results.push(missingAccountResult);
+              continue;
+            }
+
+            if (resolvedAccountId) lockedAccounts.add(resolvedAccountId);
+            running++;
+
+            // Capture resolvedAccountId in closure for unlock
+            const lockedId = resolvedAccountId;
+            executeTestCase(testCase, websiteUrl, aiModel, settings, sendEvent, credentials)
+              .then((result) => {
+                results.push(result);
+              })
+              .catch((err) => {
+                results.push({
+                  id: generateId(),
+                  testCaseId: testCase.id,
+                  status: 'error',
+                  startedAt: Date.now(),
+                  error: err instanceof Error ? err.message : 'Unknown error',
+                });
+              })
+              .finally(() => {
+                if (lockedId) lockedAccounts.delete(lockedId);
+                running--;
+                if (pending.length === 0 && running === 0) resolve();
+                else trySchedule();
+              });
+          }
+          if (running === 0 && pending.length === 0) resolve();
+        }
+        trySchedule();
+      });
 
       // Calculate summary
       const passed = results.filter((r) => r.status === 'passed').length;
@@ -151,13 +259,44 @@ export async function POST(request: NextRequest) {
   });
 }
 
+function buildAccountMapFromTeamState(
+  testCases: TestCase[],
+  state: QAState,
+  settings: Partial<QASettings>
+): Map<string, { email: string; password: string; profileId?: string; metadata?: Record<string, string> }> {
+  const map = new Map<
+    string,
+    { email: string; password: string; profileId?: string; metadata?: Record<string, string> }
+  >();
+
+  const projectIds = new Set(testCases.map((testCase) => testCase.projectId));
+  for (const projectId of projectIds) {
+    const accounts = state.userAccounts[projectId] || [];
+    for (const account of accounts) {
+      const profileId =
+        settings.browserProvider === 'browser-use-cloud'
+          ? account.providerProfiles?.browserUseCloud?.profileId
+          : account.providerProfiles?.hyperbrowser?.profileId;
+
+      map.set(account.id, {
+        email: account.email,
+        password: account.password,
+        profileId,
+        metadata: account.metadata,
+      });
+    }
+  }
+
+  return map;
+}
+
 async function executeTestCase(
   testCase: TestCase,
   websiteUrl: string,
-  apiKey: string,
   aiModel: string,
-  settings?: Partial<QASettings>,
-  sendEvent?: (event: TestEvent) => Promise<void>
+  settings: Partial<QASettings>,
+  sendEvent?: (event: TestEvent) => Promise<void>,
+  credentials?: { email: string; password: string; profileId?: string; metadata?: Record<string, string> }
 ): Promise<TestResult> {
   const testCaseId = testCase.id;
   const startTime = Date.now();
@@ -170,38 +309,27 @@ async function executeTestCase(
   });
 
   try {
-    // Build the goal from the test description and expected outcome
-    const goal = buildGoalFromTestCase(testCase);
+    const provider = getBrowserProvider(settings.browserProvider);
+    const goal = buildGoalFromTestCase(testCase, credentials);
 
-    // Send a synthetic step progress so the UI shows activity
-    await sendEvent?.({
-      type: 'step_progress',
-      testCaseId,
-      timestamp: Date.now(),
-      data: {
-        currentStep: 1,
-        totalSteps: 5,
-        stepDescription: 'Browser agent executing test...',
-      },
-    });
-
-    // Execute with Hyperbrowser HyperAgent
-    const hyperbrowserResponse = await runHyperbrowserAgent(
+    const execution = await provider.executeTest(
       {
         url: websiteUrl,
         task: goal,
-        useStealth: settings?.browserProfile === 'stealth',
-        useProxy: settings?.proxyEnabled ?? false,
-        proxyCountry: settings?.proxyCountry,
+        expectedOutcome: testCase.expectedOutcome,
+        settings,
+        credentials,
       },
-      apiKey,
       {
-        onLiveUrl: async (liveUrl) => {
+        onLiveUrl: async (liveUrl, recordingUrl) => {
           await sendEvent?.({
             type: 'streaming_url',
             testCaseId,
             timestamp: Date.now(),
-            data: { streamingUrl: liveUrl },
+            data: {
+              streamingUrl: liveUrl,
+              ...(recordingUrl ? { recordingUrl } : {}),
+            },
           });
         },
       }
@@ -210,40 +338,34 @@ async function executeTestCase(
     const completedAt = Date.now();
     const duration = completedAt - startTime;
 
-    // Determine success from Hyperbrowser response
-    let success = hyperbrowserResponse.success;
+    let status: TestResult['status'];
     let error: string | undefined;
     let reason: string | undefined;
     let extractedData: Record<string, unknown> | undefined;
 
-    // Parse result if available
-    if (hyperbrowserResponse.result && typeof hyperbrowserResponse.result === 'object') {
-      const result = hyperbrowserResponse.result as Record<string, unknown>;
-      if ('success' in result) {
-        success = Boolean(result.success);
-      }
-      if ('error' in result && typeof result.error === 'string') {
-        error = result.error;
-      }
-      if ('reason' in result && typeof result.reason === 'string') {
-        reason = result.reason;
-      }
-      if ('extractedData' in result) {
-        extractedData = result.extractedData as Record<string, unknown>;
-      }
-    }
-
-    if (!success && hyperbrowserResponse.error) {
-      error = hyperbrowserResponse.error;
-    }
-
-    // If no explicit reason but we have an error, use error as the reason
-    if (!reason && error) {
+    if (execution.status === 'error') {
+      status = 'error';
+      error = execution.error || 'Browser provider execution failed.';
       reason = error;
+    } else if (!execution.verdict) {
+      status = 'error';
+      error = 'Browser provider returned no verdict.';
+      reason = error;
+    } else {
+      status = execution.verdict.success ? 'passed' : 'failed';
+      reason = execution.verdict.reason;
+      extractedData = execution.verdict.extractedData;
     }
 
-    // Generate detailed AI summary if we don't have a good reason
-    if (!reason || reason === error) {
+    if (execution.rawProviderData && typeof execution.rawProviderData === 'object') {
+      extractedData = {
+        ...(extractedData || {}),
+        provider: execution.rawProviderData as Record<string, unknown>,
+      };
+    }
+
+    // Generate detailed AI summary if reason is missing
+    if (!reason) {
       try {
         const aiSummary = await generateTestResultSummary(
           {
@@ -252,7 +374,7 @@ async function executeTestCase(
             expectedOutcome: testCase.expectedOutcome,
           },
           {
-            status: success ? 'passed' : 'failed',
+            status,
             steps: ['Browser agent executed test'],
             error,
             duration,
@@ -263,28 +385,39 @@ async function executeTestCase(
         reason = aiSummary;
       } catch (summaryError) {
         console.error('Failed to generate AI summary:', summaryError);
+        reason = error || 'No summary available.';
       }
     }
 
     const testResult: TestResult = {
       id: generateId(),
       testCaseId,
-      status: success ? 'passed' : 'failed',
+      status,
       startedAt: startTime,
       completedAt,
       duration,
-      streamingUrl: hyperbrowserResponse.liveUrl,
+      streamingUrl: execution.liveUrl,
+      recordingUrl: execution.recordingUrl,
       error,
       reason,
       extractedData,
     };
 
-    await sendEvent?.({
-      type: 'test_complete',
-      testCaseId,
-      timestamp: completedAt,
-      data: { result: testResult },
-    });
+    if (status === 'error') {
+      await sendEvent?.({
+        type: 'test_error',
+        testCaseId,
+        timestamp: completedAt,
+        data: { error: error || 'Unknown provider error', result: testResult },
+      });
+    } else {
+      await sendEvent?.({
+        type: 'test_complete',
+        testCaseId,
+        timestamp: completedAt,
+        data: { result: testResult },
+      });
+    }
 
     return testResult;
   } catch (error) {
@@ -292,7 +425,6 @@ async function executeTestCase(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorDuration = completedAt - startTime;
 
-    // Try to generate an AI summary for the error
     let errorReason: string | undefined;
     try {
       errorReason = await generateTestResultSummary(
@@ -303,7 +435,7 @@ async function executeTestCase(
         },
         {
           status: 'error',
-          steps: ['Browser agent encountered an error'],
+          steps: ['Browser provider encountered an error'],
           error: errorMessage,
           duration: errorDuration,
         },
@@ -336,13 +468,30 @@ async function executeTestCase(
   }
 }
 
-function buildGoalFromTestCase(testCase: TestCase): string {
-  let goal = testCase.description;
+function buildGoalFromTestCase(
+  testCase: TestCase,
+  credentials?: { email: string; password: string; metadata?: Record<string, string> }
+): string {
+  let goal = '';
 
-  if (testCase.expectedOutcome) {
-    goal += `\n\nExpected outcome: ${testCase.expectedOutcome}`;
-    goal += `\n\nAfter completing the steps, verify that the expected outcome is met. Return a JSON object with { "success": true/false, "reason": "explanation" }`;
+  if (credentials) {
+    goal += `IMPORTANT: Before performing the test, you must first log in to the application.\n`;
+    goal += `Use these credentials to log in:\n`;
+    goal += `- Email: ${credentials.email}\n`;
+    goal += `- Password: ${credentials.password}\n`;
+    if (credentials.metadata && Object.keys(credentials.metadata).length > 0) {
+      goal += `- Account info: ${Object.entries(credentials.metadata)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ')}\n`;
+    }
+    goal += `\nAfter successfully logging in, proceed with the following test:\n\n`;
   }
+
+  goal += testCase.description;
+
+  goal += `\n\nExpected outcome: ${testCase.expectedOutcome || 'Test should complete successfully'}`;
+  goal +=
+    '\n\nAfter completing the steps, verify that the expected outcome is met. Return ONLY a valid JSON object with this exact shape:\n{ "success": true/false, "reason": "explanation", "extractedData": {} }\nDo not include any extra text before or after the JSON.';
 
   return goal;
 }

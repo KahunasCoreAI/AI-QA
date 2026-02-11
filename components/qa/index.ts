@@ -8,3 +8,6 @@ export { TestExecutionGrid } from './test-execution-grid';
 export { TestResultsTable } from './test-results-table';
 export { SettingsPanel } from './settings-panel';
 export { AITestGenerator } from './ai-test-generator';
+export { CreateGroupDialog } from './create-group-dialog';
+export { TestGroupCard } from './test-group-card';
+export { UserAccountsManager } from './user-accounts-manager';

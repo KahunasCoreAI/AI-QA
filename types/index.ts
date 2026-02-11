@@ -22,6 +22,43 @@ export interface TestCase {
   status: TestStatus;
   createdAt: number;
   lastRunResult?: TestResult;
+  userAccountId?: string;
+}
+
+export interface TestGroup {
+  id: string;
+  projectId: string;
+  name: string;
+  testCaseIds: string[];  // ordered list of test IDs in this group
+  createdAt: number;
+  lastRunAt?: number;
+  lastRunStatus?: 'passed' | 'failed' | 'running' | 'never_run';
+}
+
+export type ProfileStatus = 'none' | 'authenticating' | 'authenticated' | 'expired';
+
+export type AccountProfileProviderKey = 'hyperbrowser' | 'browserUseCloud';
+
+export interface UserAccountProviderProfile {
+  profileId?: string;
+  status: ProfileStatus;
+  lastAuthenticatedAt?: number;
+}
+
+export interface UserAccountProviderProfiles {
+  hyperbrowser?: UserAccountProviderProfile;
+  browserUseCloud?: UserAccountProviderProfile;
+}
+
+export interface UserAccount {
+  id: string;
+  projectId: string;
+  label: string;
+  email: string;
+  password: string;
+  metadata?: Record<string, string>;
+  createdAt: number;
+  providerProfiles?: UserAccountProviderProfiles;
 }
 
 // Test execution types
@@ -35,7 +72,8 @@ export interface TestResult {
   currentStep?: number;
   totalSteps?: number;
   currentStepDescription?: string;
-  streamingUrl?: string;
+  streamingUrl?: string;   // ephemeral live view URL — valid only while session is active
+  recordingUrl?: string;   // persistent session/recording URL — valid after session ends
   error?: string;
   reason?: string; // Explanation of why the test passed or failed
   steps?: string[]; // All steps taken during test execution
@@ -57,6 +95,16 @@ export interface TestRun {
 }
 
 // Settings types
+export type BrowserProvider =
+  | 'hyperbrowser-browser-use'
+  | 'hyperbrowser-hyperagent'
+  | 'browser-use-cloud';
+
+export interface ProviderApiKeys {
+  hyperbrowser?: string;
+  browserUseCloud?: string;
+}
+
 export interface QASettings {
   aiModel: string; // OpenRouter model ID (e.g. 'openai/gpt-5.2')
   defaultTimeout: number; // ms
@@ -64,6 +112,10 @@ export interface QASettings {
   browserProfile: 'standard' | 'stealth';
   proxyEnabled: boolean;
   proxyCountry?: 'US' | 'GB' | 'CA' | 'DE' | 'FR' | 'JP' | 'AU';
+  browserProvider: BrowserProvider;
+  hyperbrowserModel: string;
+  browserUseCloudModel: string;
+  providerApiKeys: ProviderApiKeys;
 }
 
 // Bulk test generation types
@@ -98,6 +150,7 @@ export interface TestEvent {
   timestamp: number;
   data?: {
     streamingUrl?: string;
+    recordingUrl?: string;
     currentStep?: number;
     totalSteps?: number;
     stepDescription?: string;
@@ -137,6 +190,8 @@ export interface QAState {
   currentProjectId: string | null;
   testCases: Record<string, TestCase[]>; // keyed by projectId
   testRuns: Record<string, TestRun[]>; // keyed by projectId
+  testGroups: Record<string, TestGroup[]>; // keyed by projectId
+  userAccounts: Record<string, UserAccount[]>; // keyed by projectId
   settings: QASettings;
   activeTestRun: TestRun | null;
   lastUpdated: number | null;
@@ -153,9 +208,18 @@ export type QAAction =
   | { type: 'CREATE_TEST_CASES_BULK'; payload: TestCase[] }
   | { type: 'UPDATE_TEST_CASE'; payload: { id: string; projectId: string; updates: Partial<TestCase> } }
   | { type: 'DELETE_TEST_CASE'; payload: { id: string; projectId: string } }
+  | { type: 'CREATE_TEST_GROUP'; payload: TestGroup }
+  | { type: 'UPDATE_TEST_GROUP'; payload: { id: string; projectId: string; updates: Partial<TestGroup> } }
+  | { type: 'DELETE_TEST_GROUP'; payload: { id: string; projectId: string } }
+  | { type: 'CREATE_USER_ACCOUNT'; payload: UserAccount }
+  | { type: 'UPDATE_USER_ACCOUNT'; payload: { id: string; projectId: string; updates: Partial<UserAccount> } }
+  | { type: 'DELETE_USER_ACCOUNT'; payload: { id: string; projectId: string } }
   | { type: 'START_TEST_RUN'; payload: TestRun }
   | { type: 'UPDATE_TEST_RESULT'; payload: { runId: string; result: TestResult } }
   | { type: 'COMPLETE_TEST_RUN'; payload: { runId: string; status: 'completed' | 'failed' | 'cancelled'; finalResults?: TestResult[] } }
+  | { type: 'DELETE_TEST_RESULT'; payload: { runId: string; projectId: string; resultId: string } }
+  | { type: 'DELETE_TEST_RUN'; payload: { runId: string; projectId: string } }
+  | { type: 'CLEAR_TEST_RUNS'; payload: { projectId: string } }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<QASettings> }
   | { type: 'LOAD_STATE'; payload: QAState }
   | { type: 'SET_FIRST_LOAD'; payload: boolean }

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateBugReport } from '@/lib/ai-client';
 import type { TestCase, TestResult } from '@/types';
+import { enforceRateLimit } from '@/lib/security/rate-limit';
+import { handleRouteError } from '@/lib/server/route-utils';
+import { requireTeamContext } from '@/lib/server/team-context';
 
 interface GenerateReportRequest {
   failedTest: TestResult;
@@ -11,6 +14,9 @@ interface GenerateReportRequest {
 
 export async function POST(request: NextRequest) {
   try {
+    const team = await requireTeamContext();
+    enforceRateLimit(`generate-report:${team.userId}`, { limit: 30, windowMs: 60_000 });
+
     const body: GenerateReportRequest = await request.json();
     const { failedTest, testCase, projectUrl, aiModel } = body;
 
@@ -53,7 +59,9 @@ export async function POST(request: NextRequest) {
       },
       {
         error: failedTest.error,
-        extractedData: failedTest.extractedData,
+        extractedData: sanitizePII(JSON.stringify(failedTest.extractedData || {}))
+          ? { summary: sanitizePII(JSON.stringify(failedTest.extractedData || {})) }
+          : undefined,
       },
       projectUrl,
       aiModel
@@ -61,10 +69,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(report);
   } catch (error) {
-    console.error('Error generating bug report:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to generate bug report' },
-      { status: 500 }
-    );
+    return handleRouteError(error, 'Failed to generate bug report');
   }
 }
