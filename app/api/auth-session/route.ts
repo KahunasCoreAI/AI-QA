@@ -7,10 +7,19 @@ import { requireTeamContext } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
 
 function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> {
-  return {
+  const merged: Partial<QASettings> = {
     ...settings,
+    hyperbrowserEnabled: settings?.hyperbrowserEnabled ?? true,
     browserProvider: settings?.browserProvider || DEFAULT_BROWSER_PROVIDER,
     providerApiKeys: settings?.providerApiKeys || {},
+  };
+
+  return {
+    ...merged,
+    browserProvider:
+      merged.hyperbrowserEnabled === false && merged.browserProvider !== 'browser-use-cloud'
+        ? 'browser-use-cloud'
+        : merged.browserProvider,
   };
 }
 

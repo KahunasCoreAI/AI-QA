@@ -305,6 +305,7 @@ export default function DashboardPage() {
 
   const handleLoginAccount = useCallback(async (account: UserAccount, providerColumn: AccountProviderColumn) => {
     if (!currentProject) return;
+    if (!state.settings.hyperbrowserEnabled && providerColumn === 'hyperbrowser') return;
     const providerForLogin = resolveProviderForColumn(providerColumn, state.settings.browserProvider);
     const providerKey = getProviderProfileKey(providerForLogin);
     const existingProfile = account.providerProfiles?.[providerKey];
@@ -380,6 +381,7 @@ export default function DashboardPage() {
 
   const handleClearProfile = useCallback(async (account: UserAccount, providerColumn: AccountProviderColumn) => {
     if (!currentProject) return;
+    if (!state.settings.hyperbrowserEnabled && providerColumn === 'hyperbrowser') return;
     const providerForProfile = resolveProviderForColumn(providerColumn, state.settings.browserProvider);
     const providerKey = getProviderProfileKey(providerForProfile);
     const profileId = account.providerProfiles?.[providerKey]?.profileId;
@@ -768,6 +770,7 @@ export default function DashboardPage() {
             <UserAccountsManager
               projectId={currentProject.id}
               accounts={userAccounts}
+              hyperbrowserEnabled={state.settings.hyperbrowserEnabled}
               onCreateAccount={(label, email, password, metadata) => createUserAccount(currentProject.id, label, email, password, metadata)}
               onUpdateAccount={(id, updates) => updateUserAccount(id, currentProject.id, updates)}
               onDeleteAccount={(id) => deleteUserAccount(id, currentProject.id)}

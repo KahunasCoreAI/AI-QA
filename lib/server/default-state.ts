@@ -12,6 +12,7 @@ export function buildDefaultSettings(): QASettings {
     parallelLimit: 3,
     browserProfile: 'standard',
     proxyEnabled: false,
+    hyperbrowserEnabled: true,
     browserProvider: DEFAULT_BROWSER_PROVIDER,
     hyperbrowserModel: DEFAULT_HYPERBROWSER_MODEL,
     browserUseCloudModel: DEFAULT_BROWSER_USE_CLOUD_MODEL,
@@ -41,10 +42,18 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
   }
 
   const raw = candidate as Partial<QAState> & { settings?: Partial<QASettings> };
-  const settings = {
+  const mergedSettings = {
     ...base.settings,
     ...(raw.settings || {}),
     providerApiKeys: {},
+  };
+  const settings = {
+    ...mergedSettings,
+    browserProvider:
+      mergedSettings.hyperbrowserEnabled === false &&
+      mergedSettings.browserProvider !== 'browser-use-cloud'
+        ? 'browser-use-cloud'
+        : mergedSettings.browserProvider,
   };
 
   return {
@@ -76,4 +85,3 @@ export function sanitizeStateForClient(state: QAState): QAState {
     },
   };
 }
-

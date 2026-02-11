@@ -114,6 +114,7 @@ export interface QASettings {
   browserProfile: 'standard' | 'stealth';
   proxyEnabled: boolean;
   proxyCountry?: 'US' | 'GB' | 'CA' | 'DE' | 'FR' | 'JP' | 'AU';
+  hyperbrowserEnabled: boolean;
   browserProvider: BrowserProvider;
   hyperbrowserModel: string;
   browserUseCloudModel: string;

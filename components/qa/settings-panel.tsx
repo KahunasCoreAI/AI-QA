@@ -26,9 +26,9 @@ const PRESET_MODELS = [
 ] as const;
 
 const BROWSER_PROVIDERS = [
-  { value: 'hyperbrowser-browser-use', label: 'Hyperbrowser Browser-Use' },
-  { value: 'hyperbrowser-hyperagent', label: 'Hyperbrowser HyperAgent' },
-  { value: 'browser-use-cloud', label: 'BrowserUse Cloud' },
+  { value: 'hyperbrowser-browser-use', label: 'Hyperbrowser Browser-Use', requiresHyperbrowser: true },
+  { value: 'hyperbrowser-hyperagent', label: 'Hyperbrowser HyperAgent', requiresHyperbrowser: true },
+  { value: 'browser-use-cloud', label: 'BrowserUse Cloud', requiresHyperbrowser: false },
 ] as const;
 
 interface SettingsPanelProps {
@@ -42,6 +42,12 @@ export function SettingsPanel({
   onSettingsChange,
   onClearData,
 }: SettingsPanelProps) {
+  const availableBrowserProviders = settings.hyperbrowserEnabled
+    ? BROWSER_PROVIDERS
+    : BROWSER_PROVIDERS.filter((provider) => !provider.requiresHyperbrowser);
+  const resolvedBrowserProvider = settings.hyperbrowserEnabled
+    ? settings.browserProvider
+    : 'browser-use-cloud';
   const isPreset = PRESET_MODELS.some((m) => m.value === settings.aiModel);
   const [useCustomModel, setUseCustomModel] = useState(!isPreset);
   const [hyperbrowserApiKey, setHyperbrowserApiKey] = useState('');
@@ -300,17 +306,35 @@ export function SettingsPanel({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-md border border-border/40 bg-muted/20 px-3 py-2.5">
+            <div className="space-y-0.5">
+              <Label className="text-xs font-medium">Enable Hyperbrowser</Label>
+              <p className="text-[11px] text-muted-foreground/70">
+                Disable to hide Hyperbrowser login/status flows across accounts and tests.
+              </p>
+            </div>
+            <Switch
+              checked={settings.hyperbrowserEnabled}
+              onCheckedChange={(enabled) =>
+                onSettingsChange({
+                  hyperbrowserEnabled: enabled,
+                  ...(enabled ? {} : { browserProvider: 'browser-use-cloud' as const }),
+                })
+              }
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="browserProvider" className="text-xs font-medium">Provider</Label>
             <Select
-              value={settings.browserProvider}
+              value={resolvedBrowserProvider}
               onValueChange={(v) => onSettingsChange({ browserProvider: v as QASettings['browserProvider'] })}
             >
               <SelectTrigger id="browserProvider" className="h-8 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {BROWSER_PROVIDERS.map((provider) => (
+                {availableBrowserProviders.map((provider) => (
                   <SelectItem key={provider.value} value={provider.value}>
                     {provider.label}
                   </SelectItem>
@@ -319,17 +343,19 @@ export function SettingsPanel({
             </Select>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="hyperbrowserModel" className="text-xs font-medium">Hyperbrowser Model</Label>
-            <Input
-              id="hyperbrowserModel"
-              type="text"
-              value={settings.hyperbrowserModel}
-              onChange={(e) => onSettingsChange({ hyperbrowserModel: e.target.value })}
-              className="h-8 text-sm font-mono"
-              placeholder="e.g. gemini-2.5-flash"
-            />
-          </div>
+          {settings.hyperbrowserEnabled && (
+            <div className="space-y-1.5">
+              <Label htmlFor="hyperbrowserModel" className="text-xs font-medium">Hyperbrowser Model</Label>
+              <Input
+                id="hyperbrowserModel"
+                type="text"
+                value={settings.hyperbrowserModel}
+                onChange={(e) => onSettingsChange({ hyperbrowserModel: e.target.value })}
+                className="h-8 text-sm font-mono"
+                placeholder="e.g. gemini-2.5-flash"
+              />
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="browserUseCloudModel" className="text-xs font-medium">BrowserUse Cloud Model</Label>
@@ -346,20 +372,22 @@ export function SettingsPanel({
             </p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="hyperbrowserApiKey" className="text-xs font-medium">Hyperbrowser API Key</Label>
-            <Input
-              id="hyperbrowserApiKey"
-              type="password"
-              value={hyperbrowserApiKey}
-              onChange={(e) => setHyperbrowserApiKey(e.target.value)}
-              className="h-8 text-sm font-mono"
-              placeholder={providerKeyStatus.hyperbrowserConfigured ? 'Configured (enter to replace)' : 'hb_...'}
-            />
-            <p className="text-[11px] text-muted-foreground/60">
-              {providerKeyStatus.hyperbrowserConfigured ? 'Key configured.' : 'No key configured yet.'}
-            </p>
-          </div>
+          {settings.hyperbrowserEnabled && (
+            <div className="space-y-1.5">
+              <Label htmlFor="hyperbrowserApiKey" className="text-xs font-medium">Hyperbrowser API Key</Label>
+              <Input
+                id="hyperbrowserApiKey"
+                type="password"
+                value={hyperbrowserApiKey}
+                onChange={(e) => setHyperbrowserApiKey(e.target.value)}
+                className="h-8 text-sm font-mono"
+                placeholder={providerKeyStatus.hyperbrowserConfigured ? 'Configured (enter to replace)' : 'hb_...'}
+              />
+              <p className="text-[11px] text-muted-foreground/60">
+                {providerKeyStatus.hyperbrowserConfigured ? 'Key configured.' : 'No key configured yet.'}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="browserUseCloudApiKey" className="text-xs font-medium">BrowserUse Cloud API Key</Label>

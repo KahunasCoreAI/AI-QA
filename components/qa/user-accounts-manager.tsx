@@ -46,6 +46,7 @@ import { formatRelativeTime } from '@/lib/utils';
 interface UserAccountsManagerProps {
   projectId: string;
   accounts: UserAccount[];
+  hyperbrowserEnabled?: boolean;
   onCreateAccount: (label: string, email: string, password: string, metadata?: Record<string, string>) => void;
   onUpdateAccount: (id: string, updates: Partial<UserAccount>) => void;
   onDeleteAccount: (id: string) => void;
@@ -62,6 +63,7 @@ type SheetMode = 'create' | 'edit' | null;
 
 export function UserAccountsManager({
   accounts,
+  hyperbrowserEnabled = true,
   onCreateAccount,
   onUpdateAccount,
   onDeleteAccount,
@@ -327,14 +329,14 @@ export function UserAccountsManager({
       ) : (
         <div className="rounded-md border border-border/40">
           <div className="overflow-x-auto">
-            <Table className="min-w-[1120px]">
+            <Table className={hyperbrowserEnabled ? 'min-w-[1120px]' : 'min-w-[980px]'}>
               <TableHeader>
                 <TableRow className="border-border/40 bg-muted/20 hover:bg-muted/20">
                   <TableHead className="w-[180px]">Label</TableHead>
                   <TableHead className="w-[240px]">Email</TableHead>
                   <TableHead className="w-[220px]">Metadata</TableHead>
                   <TableHead className="w-[110px]">Created</TableHead>
-                  <TableHead className="w-[170px]">Hyperbrowser</TableHead>
+                  {hyperbrowserEnabled && <TableHead className="w-[170px]">Hyperbrowser</TableHead>}
                   <TableHead className="w-[170px]">Browser Use</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
@@ -385,9 +387,11 @@ export function UserAccountsManager({
                         </span>
                       </TableCell>
 
-                      <TableCell className="py-2.5 align-top">
-                        {renderProviderStateCell(account, 'hyperbrowser')}
-                      </TableCell>
+                      {hyperbrowserEnabled && (
+                        <TableCell className="py-2.5 align-top">
+                          {renderProviderStateCell(account, 'hyperbrowser')}
+                        </TableCell>
+                      )}
 
                       <TableCell className="py-2.5 align-top">
                         {renderProviderStateCell(account, 'browser-use-cloud')}
@@ -533,7 +537,7 @@ export function UserAccountsManager({
             {sheetMode === 'edit' && activeAccount && (
               <div className="space-y-3">
                 <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Provider Sessions</p>
-                {renderProviderControls('hyperbrowser', 'Hyperbrowser', accountForActions)}
+                {hyperbrowserEnabled && renderProviderControls('hyperbrowser', 'Hyperbrowser', accountForActions)}
                 {renderProviderControls('browser-use-cloud', 'Browser Use', accountForActions)}
               </div>
             )}

@@ -26,6 +26,7 @@ const defaultSettings: QASettings = {
   parallelLimit: 3,
   browserProfile: 'standard',
   proxyEnabled: false,
+  hyperbrowserEnabled: true,
   browserProvider: DEFAULT_BROWSER_PROVIDER,
   hyperbrowserModel: DEFAULT_HYPERBROWSER_MODEL,
   browserUseCloudModel: DEFAULT_BROWSER_USE_CLOUD_MODEL,
@@ -634,12 +635,21 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
     }
 
-    case 'UPDATE_SETTINGS':
+    case 'UPDATE_SETTINGS': {
+      const mergedSettings = { ...state.settings, ...action.payload };
       return {
         ...state,
-        settings: { ...state.settings, ...action.payload },
+        settings: {
+          ...mergedSettings,
+          browserProvider:
+            mergedSettings.hyperbrowserEnabled === false &&
+            mergedSettings.browserProvider !== 'browser-use-cloud'
+              ? 'browser-use-cloud'
+              : mergedSettings.browserProvider,
+        },
         lastUpdated: Date.now(),
       };
+    }
 
     case 'LOAD_STATE':
       return {
