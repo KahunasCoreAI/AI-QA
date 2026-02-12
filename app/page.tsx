@@ -12,6 +12,7 @@ import {
   TestExecutionGrid,
   TestResultsTable,
   SettingsPanel,
+  LinearSettingsCard,
   AITestGenerator,
   AiExplorationCard,
   CreateGroupDialog,
@@ -92,6 +93,7 @@ export default function DashboardPage() {
     startTestRun,
     updateTestResult,
     completeTestRun,
+    patchTestResult,
     deleteTestResult,
     clearTestRuns,
     updateSettings,
@@ -995,6 +997,9 @@ export default function DashboardPage() {
                 userAccounts={userAccounts}
                 projectUrl={currentProject.websiteUrl}
                 aiModel={state.settings.aiModel}
+                onPatchResult={(runId, resultId, updates) =>
+                  patchTestResult(runId, currentProject.id, resultId, updates)
+                }
                 onDeleteResult={(runId, resultId) => deleteTestResult(runId, currentProject.id, resultId)}
                 onClearAllRuns={() => clearTestRuns(currentProject.id)}
               />
@@ -1026,19 +1031,28 @@ export default function DashboardPage() {
         );
 
       case 'settings':
-        if (!canManageSettings) {
-          return (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-base font-semibold tracking-tight">Settings</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Settings are restricted to the workspace owner.
-                </p>
-              </div>
+        return (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">Settings</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Configure integrations and test execution settings
+              </p>
+            </div>
+
+            <LinearSettingsCard />
+
+            {canManageSettings ? (
+              <SettingsPanel
+                settings={state.settings}
+                onSettingsChange={updateSettings}
+                onClearData={handleClearData}
+              />
+            ) : (
               <Card className="border-border/40">
                 <CardContent className="py-8">
                   <p className="text-sm text-muted-foreground">
-                    Only the designated settings owner can manage this page.
+                    Additional workspace settings are restricted to the designated settings owner.
                     {currentUserEmail && (
                       <span className="block mt-1 text-xs text-muted-foreground/60">
                         Signed in as {currentUserEmail}
@@ -1047,24 +1061,7 @@ export default function DashboardPage() {
                   </p>
                 </CardContent>
               </Card>
-            </div>
-          );
-        }
-
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-base font-semibold tracking-tight">Settings</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Configure test execution and browser settings
-              </p>
-            </div>
-
-            <SettingsPanel
-              settings={state.settings}
-              onSettingsChange={updateSettings}
-              onClearData={handleClearData}
-            />
+            )}
           </div>
         );
 

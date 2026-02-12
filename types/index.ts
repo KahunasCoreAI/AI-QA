@@ -81,6 +81,10 @@ export interface TestResult {
   reason?: string; // Explanation of why the test passed or failed
   steps?: string[]; // All steps taken during test execution
   extractedData?: Record<string, unknown>;
+  linearIssueId?: string;
+  linearIssueIdentifier?: string;
+  linearIssueUrl?: string;
+  linearCreatedAt?: number;
 }
 
 // Test run types (batch execution)
@@ -283,6 +287,15 @@ export type QAAction =
   | { type: 'MARK_AI_DRAFTS_SEEN'; payload: { projectId: string; seenAt?: number } }
   | { type: 'START_TEST_RUN'; payload: TestRun }
   | { type: 'UPDATE_TEST_RESULT'; payload: { runId: string; result: TestResult } }
+  | {
+      type: 'PATCH_TEST_RESULT';
+      payload: {
+        runId: string;
+        projectId: string;
+        resultId: string;
+        updates: Partial<Pick<TestResult, 'linearIssueId' | 'linearIssueIdentifier' | 'linearIssueUrl' | 'linearCreatedAt'>>;
+      };
+    }
   | { type: 'COMPLETE_TEST_RUN'; payload: { runId: string; status: 'completed' | 'failed' | 'cancelled'; finalResults?: TestResult[] } }
   | { type: 'DELETE_TEST_RESULT'; payload: { runId: string; projectId: string; resultId: string } }
   | { type: 'DELETE_TEST_RUN'; payload: { runId: string; projectId: string } }

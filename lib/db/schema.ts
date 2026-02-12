@@ -60,6 +60,16 @@ export const teamSecrets = pgTable('team_secrets', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const userSecrets = pgTable('user_secrets', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  linearApiKeyEncrypted: text('linear_api_key_encrypted'),
+  linearDefaultTeamId: text('linear_default_team_id'),
+  linearDefaultTeamName: text('linear_default_team_name'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const auditLogs = pgTable('audit_logs', {
   id: text('id').primaryKey(),
   teamId: text('team_id')
@@ -77,8 +87,9 @@ export const teamsRelations = relations(teams, ({ many, one }) => ({
   secrets: one(teamSecrets),
 }));
 
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   memberships: many(memberships),
+  secrets: one(userSecrets),
 }));
 
 export const membershipsRelations = relations(memberships, ({ one }) => ({
@@ -88,6 +99,13 @@ export const membershipsRelations = relations(memberships, ({ one }) => ({
   }),
   user: one(users, {
     fields: [memberships.userId],
+    references: [users.id],
+  }),
+}));
+
+export const userSecretsRelations = relations(userSecrets, ({ one }) => ({
+  user: one(users, {
+    fields: [userSecrets.userId],
     references: [users.id],
   }),
 }));

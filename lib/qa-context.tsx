@@ -499,6 +499,67 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
     }
 
+    case 'PATCH_TEST_RESULT': {
+      const { runId, projectId, resultId, updates } = action.payload;
+      let didUpdate = false;
+
+      const activeTarget = state.activeTestRuns[runId];
+      const nextActiveRuns = { ...state.activeTestRuns };
+      if (activeTarget) {
+        const nextResults = activeTarget.results.map((result) => {
+          if (result.id !== resultId) return result;
+          didUpdate = true;
+          return { ...result, ...updates };
+        });
+
+        nextActiveRuns[runId] = {
+          ...activeTarget,
+          results: nextResults,
+        };
+      }
+
+      const projectRuns = state.testRuns[projectId] || [];
+      const nextProjectRuns = projectRuns.map((run) => {
+        if (run.id !== runId) return run;
+        const nextResults = run.results.map((result) => {
+          if (result.id !== resultId) return result;
+          didUpdate = true;
+          return { ...result, ...updates };
+        });
+        return {
+          ...run,
+          results: nextResults,
+        };
+      });
+
+      if (!didUpdate) return state;
+
+      const nextTestCases = { ...state.testCases };
+      if (nextTestCases[projectId]) {
+        nextTestCases[projectId] = nextTestCases[projectId].map((testCase) => {
+          if (!testCase.lastRunResult || testCase.lastRunResult.id !== resultId) return testCase;
+          return {
+            ...testCase,
+            lastRunResult: {
+              ...testCase.lastRunResult,
+              ...updates,
+            },
+          };
+        });
+      }
+
+      return {
+        ...state,
+        activeTestRuns: nextActiveRuns,
+        testRuns: {
+          ...state.testRuns,
+          [projectId]: nextProjectRuns,
+        },
+        testCases: nextTestCases,
+        lastUpdated: Date.now(),
+      };
+    }
+
     case 'COMPLETE_TEST_RUN': {
       const targetRun = state.activeTestRuns[action.payload.runId];
       if (!targetRun) {
@@ -938,6 +999,12 @@ interface QAContextType {
   startTestRun: (projectId: string, testCaseIds: string[], parallelLimit: number) => TestRun;
   updateTestResult: (runId: string, result: TestResult) => void;
   completeTestRun: (runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => void;
+  patchTestResult: (
+    runId: string,
+    projectId: string,
+    resultId: string,
+    updates: Partial<Pick<TestResult, 'linearIssueId' | 'linearIssueIdentifier' | 'linearIssueUrl' | 'linearCreatedAt'>>
+  ) => void;
   deleteTestResult: (runId: string, projectId: string, resultId: string) => void;
   deleteTestRun: (runId: string, projectId: string) => void;
   clearTestRuns: (projectId: string) => void;
@@ -1233,6 +1300,15 @@ export function QAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'COMPLETE_TEST_RUN', payload: { runId, status, finalResults } });
   }, []);
 
+  const patchTestResult = useCallback((
+    runId: string,
+    projectId: string,
+    resultId: string,
+    updates: Partial<Pick<TestResult, 'linearIssueId' | 'linearIssueIdentifier' | 'linearIssueUrl' | 'linearCreatedAt'>>
+  ) => {
+    dispatch({ type: 'PATCH_TEST_RESULT', payload: { runId, projectId, resultId, updates } });
+  }, []);
+
   const deleteTestResult = useCallback((runId: string, projectId: string, resultId: string) => {
     dispatch({ type: 'DELETE_TEST_RESULT', payload: { runId, projectId, resultId } });
   }, []);
@@ -1296,6 +1372,7 @@ export function QAProvider({ children }: { children: ReactNode }) {
     startTestRun,
     updateTestResult,
     completeTestRun,
+    patchTestResult,
     deleteTestResult,
     deleteTestRun,
     clearTestRuns,

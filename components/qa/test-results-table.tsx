@@ -27,6 +27,11 @@ interface TestResultsTableProps {
   userAccounts: UserAccount[];
   projectUrl: string;
   aiModel: string;
+  onPatchResult?: (
+    runId: string,
+    resultId: string,
+    updates: Partial<Pick<TestResult, 'linearIssueId' | 'linearIssueIdentifier' | 'linearIssueUrl' | 'linearCreatedAt'>>
+  ) => void;
   onDeleteResult?: (runId: string, resultId: string) => void;
   onClearAllRuns?: () => void;
 }
@@ -141,12 +146,15 @@ export function TestResultsTable({
   userAccounts,
   projectUrl,
   aiModel,
+  onPatchResult,
   onDeleteResult,
   onClearAllRuns,
 }: TestResultsTableProps) {
   const [selectedResult, setSelectedResult] = useState<(TestResult & { runId: string; runStartedAt: number }) | null>(null);
   const [bugReport, setBugReport] = useState<BugReport | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isCreatingLinear, setIsCreatingLinear] = useState(false);
+  const [linearMessage, setLinearMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [deleteItem, setDeleteItem] = useState<{ runId: string; resultId: string } | null>(null);
   const [clearAllOpen, setClearAllOpen] = useState(false);
@@ -173,10 +181,15 @@ export function TestResultsTable({
     return groups.find((g) => g.testCaseIds.includes(testCaseId));
   };
 
-  const getAccount = (userAccountId: string | undefined) => {
+  const getAccountById = (accountId: string | undefined) => {
+    if (!accountId) return null;
+    return userAccounts.find((a) => a.id === accountId) ?? null;
+  };
+
+  const getAssignedAccount = (userAccountId: string | undefined) => {
     if (!userAccountId) return null;
     if (userAccountId === '__any__') return '__any__' as const;
-    return userAccounts.find((a) => a.id === userAccountId) ?? null;
+    return getAccountById(userAccountId);
   };
 
   // Summary across all results
@@ -208,6 +221,74 @@ export function TestResultsTable({
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const createLinearIssue = async (result: TestResult, testCase: TestCase, runId: string) => {
+    setIsCreatingLinear(true);
+    setLinearMessage(null);
+    try {
+      const response = await fetch('/api/linear/create-issue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          failedTest: result,
+          testCase,
+          projectUrl,
+          aiModel,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || `Failed to create Linear issue (${response.status})`);
+      }
+
+      const payload = (await response.json()) as {
+        issueId: string;
+        issueIdentifier: string;
+        issueUrl: string;
+      };
+
+      const updates = {
+        linearIssueId: payload.issueId,
+        linearIssueIdentifier: payload.issueIdentifier,
+        linearIssueUrl: payload.issueUrl,
+        linearCreatedAt: Date.now(),
+      };
+
+      onPatchResult?.(runId, result.id, updates);
+      setSelectedResult((previous) => {
+        if (!previous || previous.id !== result.id || previous.runId !== runId) return previous;
+        return {
+          ...previous,
+          ...updates,
+        };
+      });
+      setLinearMessage(`Linked Linear issue ${payload.issueIdentifier}.`);
+    } catch (error) {
+      setLinearMessage(error instanceof Error ? error.message : 'Failed to create Linear issue.');
+    } finally {
+      setIsCreatingLinear(false);
+    }
+  };
+
+  const removeLinearReference = (result: TestResult, runId: string) => {
+    const updates = {
+      linearIssueId: undefined,
+      linearIssueIdentifier: undefined,
+      linearIssueUrl: undefined,
+      linearCreatedAt: undefined,
+    };
+
+    onPatchResult?.(runId, result.id, updates);
+    setSelectedResult((previous) => {
+      if (!previous || previous.id !== result.id || previous.runId !== runId) return previous;
+      return {
+        ...previous,
+        ...updates,
+      };
+    });
+    setLinearMessage('Linear reference removed from this failed result.');
   };
 
   const copyReport = () => {
@@ -271,7 +352,8 @@ export function TestResultsTable({
                 const testCase = getTestCase(result.testCaseId);
                 const title = testCase?.title || `Test ${result.testCaseId.slice(0, 8)}…`;
                 const group = getGroup(result.testCaseId);
-                const account = getAccount(testCase?.userAccountId);
+                const account = getAssignedAccount(testCase?.userAccountId);
+                const resolvedAccount = getAccountById(result.resolvedUserAccountId);
                 const whenTs = result.startedAt || result.runStartedAt;
                 const whenObj = whenTs ? new Date(whenTs) : null;
                 const recordingLink =
@@ -281,7 +363,10 @@ export function TestResultsTable({
                   <TableRow
                     key={`${result.runId}-${result.id}-${result.startedAt}`}
                     className="cursor-pointer hover:bg-accent/20 border-border/30"
-                    onClick={() => setSelectedResult(result)}
+                    onClick={() => {
+                      setLinearMessage(null);
+                      setSelectedResult(result);
+                    }}
                   >
                     {/* Test name */}
                     <TableCell>
@@ -301,7 +386,13 @@ export function TestResultsTable({
 
                     {/* Account */}
                     <TableCell>
-                      {account === '__any__' ? (
+                      {resolvedAccount ? (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{resolvedAccount.label}</Badge>
+                      ) : result.resolvedUserAccountId ? (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          {`Acct ${result.resolvedUserAccountId.slice(0, 8)}…`}
+                        </Badge>
+                      ) : account === '__any__' ? (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0">Any</Badge>
                       ) : account ? (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0">{account.label}</Badge>
@@ -369,7 +460,12 @@ export function TestResultsTable({
       </div>
 
       {/* Result Detail Sheet */}
-      <Sheet open={!!selectedResult} onOpenChange={(open) => { if (!open) setSelectedResult(null); }}>
+      <Sheet open={!!selectedResult} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedResult(null);
+          setLinearMessage(null);
+        }
+      }}>
         <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2 text-sm">
@@ -614,18 +710,58 @@ export function TestResultsTable({
                 </a>
               )}
 
-              {/* Bug Report Button */}
               {(selectedResult.status === 'failed' || selectedResult.status === 'error') && selectedTestCase && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-[11px] w-full"
-                  onClick={() => generateBugReport(selectedResult, selectedTestCase)}
-                  disabled={isGenerating}
-                >
-                  <Bug className="mr-1.5 h-3 w-3" />
-                  {isGenerating ? 'Generating…' : 'Generate Bug Report'}
-                </Button>
+                <div className="space-y-2">
+                  {selectedResult.linearIssueIdentifier && selectedResult.linearIssueUrl ? (
+                    <div className="rounded-md border border-border/30 bg-muted/20 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <a
+                          href={selectedResult.linearIssueUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          {selectedResult.linearIssueIdentifier}
+                        </a>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[11px] text-muted-foreground hover:text-destructive"
+                          onClick={() => removeLinearReference(selectedResult, selectedResult.runId)}
+                        >
+                          Remove Reference
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-7 text-[11px] w-full"
+                      onClick={() => createLinearIssue(selectedResult, selectedTestCase, selectedResult.runId)}
+                      disabled={isCreatingLinear}
+                    >
+                      <Link2 className="mr-1.5 h-3 w-3" />
+                      {isCreatingLinear ? 'Creating Linear Bug…' : 'Create Bug in Linear'}
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] w-full"
+                    onClick={() => generateBugReport(selectedResult, selectedTestCase)}
+                    disabled={isGenerating}
+                  >
+                    <Bug className="mr-1.5 h-3 w-3" />
+                    {isGenerating ? 'Generating…' : 'Generate Bug Report'}
+                  </Button>
+
+                  {linearMessage && (
+                    <p className="text-[11px] text-muted-foreground/80">{linearMessage}</p>
+                  )}
+                </div>
               )}
             </div>
           )}
