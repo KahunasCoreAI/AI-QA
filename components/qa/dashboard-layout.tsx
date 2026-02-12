@@ -47,6 +47,7 @@ interface DashboardLayoutProps {
   onCreateProject: () => void;
   onEditProject: (project: Project) => void;
   onDeleteProject: (id: string) => void;
+  canManageProjects: boolean;
   hasUnseenDrafts?: boolean;
 }
 
@@ -73,6 +74,7 @@ export function DashboardLayout({
   onCreateProject,
   onEditProject,
   onDeleteProject,
+  canManageProjects,
   hasUnseenDrafts = false,
 }: DashboardLayoutProps) {
   const { signOut } = useClerk();
@@ -99,109 +101,132 @@ export function DashboardLayout({
       >
         {/* Project Switcher */}
         <div className="border-b border-border/60 p-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className={cn(
-                  'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors duration-100',
-                  'hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                  'data-[state=open]:bg-accent',
-                  collapsed && 'justify-center px-0'
-                )}
-              >
-                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
-                  <HatGlasses className="h-3.5 w-3.5 text-primary" />
-                </div>
-                {!collapsed && (
-                  <>
-                    <div className="flex-1 min-w-0">
-                      {currentProject ? (
-                        <>
-                          <div className="text-[13px] font-semibold truncate text-foreground">
-                            {currentProject.name}
+          {canManageProjects ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={cn(
+                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors duration-100',
+                    'hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                    'data-[state=open]:bg-accent',
+                    collapsed && 'justify-center px-0'
+                  )}
+                >
+                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
+                    <HatGlasses className="h-3.5 w-3.5 text-primary" />
+                  </div>
+                  {!collapsed && (
+                    <>
+                      <div className="flex-1 min-w-0">
+                        {currentProject ? (
+                          <>
+                            <div className="text-[13px] font-semibold truncate text-foreground">
+                              {currentProject.name}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {currentProject.websiteUrl.replace(/^https?:\/\//, '')}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-[13px] font-medium text-muted-foreground">
+                            Select project
                           </div>
-                          <div className="text-[11px] text-muted-foreground truncate">
-                            {currentProject.websiteUrl.replace(/^https?:\/\//, '')}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-[13px] font-medium text-muted-foreground">
-                          Select project
-                        </div>
-                      )}
-                    </div>
-                    <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" />
-                  </>
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              className="w-[--radix-dropdown-menu-trigger-width] min-w-[220px]"
-              align="start"
-              sideOffset={4}
-              side="right"
-            >
-              <DropdownMenuLabel className="text-[11px] text-muted-foreground font-medium">
-                Projects
-              </DropdownMenuLabel>
-              {projects.length === 0 ? (
-                <div className="px-2 py-3 text-center">
-                  <p className="text-[11px] text-muted-foreground">No projects yet</p>
-                </div>
-              ) : (
-                projects.map((project) => (
-                  <DropdownMenuItem
-                    key={project.id}
-                    className={cn(
-                      'flex items-center gap-2.5 px-2 py-2 cursor-pointer group',
-                      currentProject?.id === project.id && 'bg-accent'
-                    )}
-                    onSelect={() => onSelectProject(project)}
-                  >
-                    <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-border/60 bg-background">
-                      <Globe className="h-3 w-3 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[13px] font-medium truncate">{project.name}</div>
-                      <div className="text-[11px] text-muted-foreground truncate">
-                        {project.websiteUrl.replace(/^https?:\/\//, '')}
+                        )}
                       </div>
-                    </div>
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        className="p-1 rounded hover:bg-accent"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEditProject(project);
-                        }}
-                      >
-                        <Pencil className="h-3 w-3 text-muted-foreground" />
-                      </button>
-                      <button
-                        className="p-1 rounded hover:bg-destructive/10"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteProject(project.id);
-                        }}
-                      >
-                        <Trash2 className="h-3 w-3 text-destructive/70" />
-                      </button>
-                    </div>
-                  </DropdownMenuItem>
-                ))
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="flex items-center gap-2.5 px-2 py-2 cursor-pointer"
-                onSelect={onCreateProject}
+                      <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" />
+                    </>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="w-[--radix-dropdown-menu-trigger-width] min-w-[220px]"
+                align="start"
+                sideOffset={4}
+                side="right"
               >
-                <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-border/60 bg-background">
-                  <Plus className="h-3 w-3 text-muted-foreground" />
+                <DropdownMenuLabel className="text-[11px] text-muted-foreground font-medium">
+                  Projects
+                </DropdownMenuLabel>
+                {projects.length === 0 ? (
+                  <div className="px-2 py-3 text-center">
+                    <p className="text-[11px] text-muted-foreground">No projects yet</p>
+                  </div>
+                ) : (
+                  projects.map((project) => (
+                    <DropdownMenuItem
+                      key={project.id}
+                      className={cn(
+                        'flex items-center gap-2.5 px-2 py-2 cursor-pointer group',
+                        currentProject?.id === project.id && 'bg-accent'
+                      )}
+                      onSelect={() => onSelectProject(project)}
+                    >
+                      <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-border/60 bg-background">
+                        <Globe className="h-3 w-3 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-medium truncate">{project.name}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">
+                          {project.websiteUrl.replace(/^https?:\/\//, '')}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          className="p-1 rounded hover:bg-accent"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditProject(project);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                        <button
+                          className="p-1 rounded hover:bg-destructive/10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteProject(project.id);
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3 text-destructive/70" />
+                        </button>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="flex items-center gap-2.5 px-2 py-2 cursor-pointer"
+                  onSelect={onCreateProject}
+                >
+                  <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-border/60 bg-background">
+                    <Plus className="h-3 w-3 text-muted-foreground" />
+                  </div>
+                  <span className="text-[13px] font-medium text-muted-foreground">Add project</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div
+              className={cn(
+                'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2',
+                collapsed && 'justify-center px-0'
+              )}
+            >
+              <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
+                <HatGlasses className="h-3.5 w-3.5 text-primary" />
+              </div>
+              {!collapsed && currentProject && (
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold truncate text-foreground">
+                    {currentProject.name}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    {currentProject.websiteUrl.replace(/^https?:\/\//, '')}
+                  </div>
                 </div>
-                <span className="text-[13px] font-medium text-muted-foreground">Add project</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Navigation */}

@@ -34,13 +34,19 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'state is required' }, { status: 400 });
     }
 
-    const canManageSettings = canManageTeamSettings(team.email);
-    const stateToSave = canManageSettings
-      ? nextState
-      : {
-          ...(nextState as Record<string, unknown>),
-          settings: (await getOrCreateTeamState(team.teamId)).settings,
-        };
+    const canManage = canManageTeamSettings(team.email);
+    let stateToSave: unknown;
+
+    if (canManage) {
+      stateToSave = nextState;
+    } else {
+      const currentState = await getOrCreateTeamState(team.teamId);
+      stateToSave = {
+        ...(nextState as Record<string, unknown>),
+        settings: currentState.settings,
+        projects: currentState.projects,
+      };
+    }
 
     const saved = await saveTeamState(team.teamId, team.userId, stateToSave);
     return NextResponse.json({ state: saved });

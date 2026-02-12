@@ -130,6 +130,7 @@ export default function DashboardPage() {
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
   const currentUserFirstName = currentViewer?.displayName;
   const canManageSettings = currentUserEmail === SETTINGS_OWNER_EMAIL;
+  const canManageProjects = canManageSettings;
   const testCases = useMemo(
     () => currentProject ? getTestCasesForProject(currentProject.id) : [],
     [currentProject, getTestCasesForProject]
@@ -1102,12 +1103,20 @@ export default function DashboardPage() {
         projects={state.projects}
         currentProject={currentProject ?? null}
         onSelectProject={handleSelectProject}
+        canManageProjects={canManageProjects}
         onCreateProject={() => {
+          if (!canManageProjects) return;
           setEditingProject(undefined);
           setProjectDialogOpen(true);
         }}
-        onEditProject={handleEditProject}
-        onDeleteProject={handleDeleteProject}
+        onEditProject={(project) => {
+          if (!canManageProjects) return;
+          handleEditProject(project);
+        }}
+        onDeleteProject={(id) => {
+          if (!canManageProjects) return;
+          handleDeleteProject(id);
+        }}
         hasUnseenDrafts={Boolean(currentProject && aiDraftNotification.hasUnseenDrafts)}
       >
         {renderContent()}
