@@ -67,6 +67,7 @@ export interface UserAccount {
 export interface TestResult {
   id: string;
   testCaseId: string;
+  resolvedUserAccountId?: string;
   status: 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'error';
   startedAt: number;
   completedAt?: number;
@@ -201,6 +202,7 @@ export interface TestEvent {
   data?: {
     taskId?: string;
     sessionId?: string;
+    resolvedUserAccountId?: string;
     streamingUrl?: string;
     recordingUrl?: string;
     currentStep?: number;

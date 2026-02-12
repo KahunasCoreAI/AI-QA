@@ -241,10 +241,15 @@ export async function POST(request: NextRequest) {
         waitTimer = null;
       }
 
-      async function recordAccountError(testCase: TestCase, reason: string) {
+      async function recordAccountError(
+        testCase: TestCase,
+        reason: string,
+        resolvedUserAccountId?: string
+      ) {
         const errorResult: TestResult = {
           id: generateId(),
           testCaseId: testCase.id,
+          resolvedUserAccountId,
           status: 'error',
           startedAt: Date.now(),
           completedAt: Date.now(),
@@ -259,6 +264,7 @@ export async function POST(request: NextRequest) {
           timestamp: Date.now(),
           data: {
             error: reason,
+            resolvedUserAccountId,
             result: errorResult,
           },
         });
@@ -309,7 +315,8 @@ export async function POST(request: NextRequest) {
             if (resolvedAccountId && !credentials) {
               void recordAccountError(
                 testCase,
-                `Assigned account '${resolvedAccountId}' was not found in shared team state.`
+                `Assigned account '${resolvedAccountId}' was not found in shared team state.`,
+                resolvedAccountId
               );
               continue;
             }
@@ -327,7 +334,16 @@ export async function POST(request: NextRequest) {
 
             // Capture resolvedAccountId in closure for unlock
             const lockedId = resolvedAccountId;
-            executeTestCase(testCase, websiteUrl, aiModel, settings, sendEvent, credentials, runSignal)
+            executeTestCase(
+              testCase,
+              websiteUrl,
+              aiModel,
+              settings,
+              sendEvent,
+              credentials,
+              runSignal,
+              resolvedAccountId
+            )
               .then((result) => {
                 results.push(result);
               })
@@ -335,6 +351,7 @@ export async function POST(request: NextRequest) {
                 results.push({
                   id: generateId(),
                   testCaseId: testCase.id,
+                  resolvedUserAccountId: lockedId,
                   status: 'error',
                   startedAt: Date.now(),
                   error: err instanceof Error ? err.message : 'Unknown error',
@@ -370,7 +387,8 @@ export async function POST(request: NextRequest) {
                 pending.splice(i, 1);
                 void recordAccountError(
                   pendingTest,
-                  `Assigned account '${requestedAccountId}' was not found in shared team state.`
+                  `Assigned account '${requestedAccountId}' was not found in shared team state.`,
+                  requestedAccountId
                 );
                 continue;
               }
@@ -473,6 +491,7 @@ async function executeTestCase(
   sendEvent?: (event: TestEvent) => Promise<void>,
   credentials?: ExecutionCredentials,
   signal?: AbortSignal,
+  resolvedUserAccountId?: string,
 ): Promise<TestResult> {
   const testCaseId = testCase.id;
   const startTime = Date.now();
@@ -482,6 +501,7 @@ async function executeTestCase(
     type: 'test_start',
     testCaseId,
     timestamp: startTime,
+    ...(resolvedUserAccountId ? { data: { resolvedUserAccountId } } : {}),
   });
 
   try {
@@ -514,7 +534,7 @@ async function executeTestCase(
             type: 'task_created',
             testCaseId,
             timestamp: Date.now(),
-            data: { taskId, sessionId },
+            data: { taskId, sessionId, resolvedUserAccountId },
           });
         },
       }
@@ -577,6 +597,7 @@ async function executeTestCase(
     const testResult: TestResult = {
       id: generateId(),
       testCaseId,
+      resolvedUserAccountId,
       status,
       startedAt: startTime,
       completedAt,
@@ -634,6 +655,7 @@ async function executeTestCase(
     const testResult: TestResult = {
       id: generateId(),
       testCaseId,
+      resolvedUserAccountId,
       status: 'error',
       startedAt: startTime,
       completedAt,

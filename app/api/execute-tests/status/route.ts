@@ -10,12 +10,14 @@ interface TaskStatusRequest {
     testCaseId: string;
     taskId: string;
     sessionId: string;
+    resolvedUserAccountId?: string;
   }>;
 }
 
 interface TaskStatusResponseItem {
   testCaseId: string;
   taskId: string;
+  resolvedUserAccountId?: string;
   status: 'running' | 'finished' | 'stopped' | 'error';
   result?: {
     verdict: { success: boolean; reason: string; extractedData?: Record<string, unknown> } | null;
@@ -60,6 +62,7 @@ export async function POST(request: NextRequest) {
         return {
           testCaseId: task.testCaseId,
           taskId: task.taskId,
+          resolvedUserAccountId: task.resolvedUserAccountId,
           status: result.status,
           result:
             result.status !== 'running'
@@ -74,6 +77,7 @@ export async function POST(request: NextRequest) {
       return {
         testCaseId: body.tasks[idx].testCaseId,
         taskId: body.tasks[idx].taskId,
+        resolvedUserAccountId: body.tasks[idx].resolvedUserAccountId,
         status: 'error' as const,
         error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
       };

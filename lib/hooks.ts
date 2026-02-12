@@ -73,8 +73,10 @@ export function useTestExecution(
   const [runStates, setRunStates] = useState<Map<string, ExecutionRunState>>(new Map());
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const resultsRef = useRef<Map<string, Map<string, TestResult>>>(new Map());
-  // Map<runId, Map<testCaseId, { taskId, sessionId }>>
-  const taskMapRef = useRef<Map<string, Map<string, { taskId: string; sessionId: string }>>>(new Map());
+  // Map<runId, Map<testCaseId, { taskId, sessionId, resolvedUserAccountId }>>
+  const taskMapRef = useRef<
+    Map<string, Map<string, { taskId: string; sessionId: string; resolvedUserAccountId?: string }>>
+  >(new Map());
 
   const handleTestEvent = useCallback((runId: string, event: TestEvent) => {
     const { testCaseId, data } = event;
@@ -85,6 +87,7 @@ export function useTestExecution(
 
       const next = new Map(prev);
       const updatedResults = new Map(run.resultsMap);
+      const taskInfo = taskMapRef.current.get(runId)?.get(testCaseId);
       const existing = updatedResults.get(testCaseId) || {
         id: `result-${testCaseId}`,
         testCaseId,
@@ -97,7 +100,11 @@ export function useTestExecution(
           // Store task ID mapping for reconciliation; no result state change needed
           if (data?.taskId && data?.sessionId) {
             const runTasks = taskMapRef.current.get(runId) ?? new Map();
-            runTasks.set(testCaseId, { taskId: data.taskId, sessionId: data.sessionId });
+            runTasks.set(testCaseId, {
+              taskId: data.taskId,
+              sessionId: data.sessionId,
+              resolvedUserAccountId: data.resolvedUserAccountId,
+            });
             taskMapRef.current.set(runId, runTasks);
           }
           break;
@@ -107,6 +114,8 @@ export function useTestExecution(
             ...existing,
             status: 'running' as const,
             startedAt: event.timestamp,
+            resolvedUserAccountId:
+              data?.resolvedUserAccountId || existing.resolvedUserAccountId || taskInfo?.resolvedUserAccountId,
           });
           break;
 
@@ -129,17 +138,35 @@ export function useTestExecution(
 
         case 'test_complete':
           if (data?.result) {
-            updatedResults.set(testCaseId, data.result);
+            updatedResults.set(testCaseId, {
+              ...data.result,
+              resolvedUserAccountId:
+                data.result.resolvedUserAccountId ||
+                existing.resolvedUserAccountId ||
+                taskInfo?.resolvedUserAccountId,
+            });
           }
           break;
 
         case 'test_error':
-          updatedResults.set(testCaseId, {
-            ...existing,
-            status: 'error' as const,
-            error: data?.error,
-            completedAt: event.timestamp,
-          });
+          if (data?.result) {
+            updatedResults.set(testCaseId, {
+              ...data.result,
+              resolvedUserAccountId:
+                data.result.resolvedUserAccountId ||
+                existing.resolvedUserAccountId ||
+                taskInfo?.resolvedUserAccountId,
+            });
+          } else {
+            updatedResults.set(testCaseId, {
+              ...existing,
+              status: 'error' as const,
+              error: data?.error,
+              completedAt: event.timestamp,
+              resolvedUserAccountId:
+                data?.resolvedUserAccountId || existing.resolvedUserAccountId || taskInfo?.resolvedUserAccountId,
+            });
+          }
           break;
 
         default:
@@ -164,14 +191,24 @@ export function useTestExecution(
 
     // Find tests that have known task IDs but are still running
     const currentResults = resultsRef.current.get(runId) ?? new Map();
-    const pendingTasks: Array<{ testCaseId: string; taskId: string; sessionId: string }> = [];
+    const pendingTasks: Array<{
+      testCaseId: string;
+      taskId: string;
+      sessionId: string;
+      resolvedUserAccountId?: string;
+    }> = [];
 
     for (const testCaseId of testCaseIds) {
       const result = currentResults.get(testCaseId);
       const taskInfo = runTasks.get(testCaseId);
       if (!taskInfo) continue;
       if (result && result.status !== 'running' && result.status !== 'pending') continue;
-      pendingTasks.push({ testCaseId, taskId: taskInfo.taskId, sessionId: taskInfo.sessionId });
+      pendingTasks.push({
+        testCaseId,
+        taskId: taskInfo.taskId,
+        sessionId: taskInfo.sessionId,
+        resolvedUserAccountId: taskInfo.resolvedUserAccountId,
+      });
     }
 
     if (pendingTasks.length === 0) return;
@@ -204,6 +241,7 @@ export function useTestExecution(
             results: Array<{
               testCaseId: string;
               taskId: string;
+              resolvedUserAccountId?: string;
               status: string;
               result?: {
                 verdict: { success: boolean; reason: string; extractedData?: Record<string, unknown> } | null;
@@ -223,7 +261,7 @@ export function useTestExecution(
                 type: 'test_error',
                 testCaseId: item.testCaseId,
                 timestamp: Date.now(),
-                data: { error: item.error },
+                data: { error: item.error, resolvedUserAccountId: item.resolvedUserAccountId },
               });
               continue;
             }
@@ -238,6 +276,7 @@ export function useTestExecution(
                   result: {
                     id: `reconciled-${item.testCaseId}`,
                     testCaseId: item.testCaseId,
+                    resolvedUserAccountId: item.resolvedUserAccountId,
                     status,
                     startedAt: Date.now(),
                     completedAt: Date.now(),
@@ -273,7 +312,10 @@ export function useTestExecution(
         type: 'test_error',
         testCaseId,
         timestamp: Date.now(),
-        data: { error: 'Connection lost and task status could not be resolved.' },
+        data: {
+          error: 'Connection lost and task status could not be resolved.',
+          resolvedUserAccountId: runTasks.get(testCaseId)?.resolvedUserAccountId,
+        },
       });
     }
   }, [handleTestEvent]);
