@@ -1,4 +1,4 @@
-import type { QASettings, QAState } from '@/types';
+import type { QASettings, QAState, TestRun } from '@/types';
 
 const DEFAULT_AI_MODEL = process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'openai/gpt-5.2';
 const DEFAULT_BROWSER_PROVIDER = 'hyperbrowser-browser-use' as const;
@@ -29,7 +29,7 @@ export function buildDefaultState(): QAState {
     testGroups: {},
     userAccounts: {},
     settings: buildDefaultSettings(),
-    activeTestRun: null,
+    activeTestRuns: {},
     lastUpdated: null,
     isFirstLoad: false,
   };
@@ -65,7 +65,19 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
     testGroups: raw.testGroups && typeof raw.testGroups === 'object' ? raw.testGroups : base.testGroups,
     userAccounts: raw.userAccounts && typeof raw.userAccounts === 'object' ? raw.userAccounts : base.userAccounts,
     settings,
-    activeTestRun: raw.activeTestRun || null,
+    activeTestRuns: (() => {
+      const candidate = raw as Record<string, unknown>;
+      if (candidate.activeTestRuns && typeof candidate.activeTestRuns === 'object' && !Array.isArray(candidate.activeTestRuns)) {
+        return candidate.activeTestRuns as Record<string, TestRun>;
+      }
+      if (candidate.activeTestRun && typeof candidate.activeTestRun === 'object') {
+        const oldRun = candidate.activeTestRun as TestRun;
+        if (oldRun.id) {
+          return { [oldRun.id]: oldRun };
+        }
+      }
+      return {};
+    })(),
     currentProjectId:
       typeof raw.currentProjectId === 'string' || raw.currentProjectId === null
         ? raw.currentProjectId

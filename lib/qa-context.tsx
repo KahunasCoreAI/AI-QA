@@ -41,7 +41,7 @@ const initialState: QAState = {
   testGroups: {},
   userAccounts: {},
   settings: defaultSettings,
-  activeTestRun: null,
+  activeTestRuns: {},
   lastUpdated: null,
   isFirstLoad: true,
 };
@@ -254,7 +254,10 @@ function reducer(state: QAState, action: QAAction): QAState {
     case 'START_TEST_RUN':
       return {
         ...state,
-        activeTestRun: action.payload,
+        activeTestRuns: {
+          ...state.activeTestRuns,
+          [action.payload.id]: action.payload,
+        },
         projects: state.projects.map((p) =>
           p.id === action.payload.projectId
             ? { ...p, lastRunStatus: 'running', lastRunAt: Date.now() }
@@ -264,20 +267,21 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
 
     case 'UPDATE_TEST_RESULT': {
-      if (!state.activeTestRun || state.activeTestRun.id !== action.payload.runId) {
+      const targetRun = state.activeTestRuns[action.payload.runId];
+      if (!targetRun) {
         return state;
       }
 
-      const existingResultIndex = state.activeTestRun.results.findIndex(
+      const existingResultIndex = targetRun.results.findIndex(
         (r) => r.testCaseId === action.payload.result.testCaseId
       );
 
       let newResults: TestResult[];
       if (existingResultIndex >= 0) {
-        newResults = [...state.activeTestRun.results];
+        newResults = [...targetRun.results];
         newResults[existingResultIndex] = action.payload.result;
       } else {
-        newResults = [...state.activeTestRun.results, action.payload.result];
+        newResults = [...targetRun.results, action.payload.result];
       }
 
       const passed = newResults.filter((r) => r.status === 'passed').length;
@@ -285,36 +289,43 @@ function reducer(state: QAState, action: QAAction): QAState {
 
       return {
         ...state,
-        activeTestRun: {
-          ...state.activeTestRun,
-          results: newResults,
-          passed,
-          failed,
+        activeTestRuns: {
+          ...state.activeTestRuns,
+          [action.payload.runId]: {
+            ...targetRun,
+            results: newResults,
+            passed,
+            failed,
+          },
         },
         lastUpdated: Date.now(),
       };
     }
 
     case 'COMPLETE_TEST_RUN': {
-      if (!state.activeTestRun || state.activeTestRun.id !== action.payload.runId) {
+      const targetRun = state.activeTestRuns[action.payload.runId];
+      if (!targetRun) {
         return state;
       }
 
       // Use finalResults if provided (avoids timing issues), otherwise fall back to state
-      const resultsToUse = action.payload.finalResults || state.activeTestRun.results;
+      const resultsToUse = action.payload.finalResults || targetRun.results;
 
       // Recalculate passed/failed counts from the results we're using
       const passed = resultsToUse.filter((r: TestResult) => r.status === 'passed').length;
       const failed = resultsToUse.filter((r: TestResult) => r.status === 'failed' || r.status === 'error').length;
 
       const completedRun: TestRun = {
-        ...state.activeTestRun,
+        ...targetRun,
         results: resultsToUse,
         passed,
         failed,
         status: action.payload.status,
         completedAt: Date.now(),
       };
+
+      // Remove the completed run from activeTestRuns
+      const { [action.payload.runId]: _removed, ...remainingActiveRuns } = state.activeTestRuns;
 
       const projectId = completedRun.projectId;
       const existingRuns = state.testRuns[projectId] || [];
@@ -356,7 +367,7 @@ function reducer(state: QAState, action: QAAction): QAState {
 
       return {
         ...state,
-        activeTestRun: null,
+        activeTestRuns: remainingActiveRuns,
         testRuns: {
           ...state.testRuns,
           [projectId]: [completedRun, ...existingRuns].slice(0, 50),
@@ -373,7 +384,7 @@ function reducer(state: QAState, action: QAAction): QAState {
     case 'DELETE_TEST_RESULT': {
       const { runId, projectId, resultId } = action.payload;
       // Guard: don't mutate a currently-running run
-      if (state.activeTestRun?.id === runId) return state;
+      if (state.activeTestRuns[runId]) return state;
 
       const projectRuns = state.testRuns[projectId] || [];
       const targetRun = projectRuns.find((r) => r.id === runId);
@@ -501,7 +512,7 @@ function reducer(state: QAState, action: QAAction): QAState {
     case 'DELETE_TEST_RUN': {
       const { runId, projectId } = action.payload;
       // Guard: don't delete a currently-running run
-      if (state.activeTestRun?.id === runId) return state;
+      if (state.activeTestRuns[runId]) return state;
 
       const projectRuns = state.testRuns[projectId] || [];
       const deletedRun = projectRuns.find(r => r.id === runId);
@@ -651,13 +662,20 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
     }
 
-    case 'LOAD_STATE':
+    case 'LOAD_STATE': {
+      const incomingActiveRuns = action.payload.activeTestRuns || {};
+      const mergedActiveRuns: Record<string, TestRun> = {
+        ...incomingActiveRuns,
+        ...state.activeTestRuns,  // Local runs take precedence
+      };
       return {
         ...action.payload,
+        activeTestRuns: mergedActiveRuns,
         testGroups: action.payload.testGroups || {},
         userAccounts: action.payload.userAccounts || {},
         isFirstLoad: false,
       };
+    }
 
     case 'SET_FIRST_LOAD':
       return {

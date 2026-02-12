@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS "teams" (
   "id" text PRIMARY KEY NOT NULL,
   "name" text NOT NULL,
-  "allowed_email_domain" text DEFAULT 'kahunas.io' NOT NULL,
+  "allowed_email_domain" text DEFAULT 'example.com' NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -101,4 +101,3 @@ DO $$ BEGIN
     FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE set null;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
-

@@ -11,7 +11,7 @@ import type { QAState } from '@/types';
 export const teams = pgTable('teams', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
-  allowedEmailDomain: text('allowed_email_domain').notNull().default('kahunas.io'),
+  allowedEmailDomain: text('allowed_email_domain').notNull().default('example.com'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -91,4 +91,3 @@ export const membershipsRelations = relations(memberships, ({ one }) => ({
     references: [users.id],
   }),
 }));
-

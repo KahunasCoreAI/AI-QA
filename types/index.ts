@@ -196,7 +196,7 @@ export interface QAState {
   testGroups: Record<string, TestGroup[]>; // keyed by projectId
   userAccounts: Record<string, UserAccount[]>; // keyed by projectId
   settings: QASettings;
-  activeTestRun: TestRun | null;
+  activeTestRuns: Record<string, TestRun>;
   lastUpdated: number | null;
   isFirstLoad: boolean;
 }

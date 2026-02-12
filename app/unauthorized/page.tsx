@@ -1,7 +1,13 @@
 import { SignedIn, SignedOut, SignInButton, UserButton } from '@clerk/nextjs';
 import { Button } from '@/components/ui/button';
 
-const ALLOWED_EMAIL_DOMAIN = 'kahunas.io';
+const ALLOWED_EMAIL_DOMAIN = (
+  process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN ||
+  process.env.ALLOWED_EMAIL_DOMAIN ||
+  'example.com'
+)
+  .trim()
+  .toLowerCase();
 
 export default function UnauthorizedPage() {
   const hasClerk = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);

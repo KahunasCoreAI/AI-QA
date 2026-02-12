@@ -51,7 +51,12 @@ import type {
 
 type TestCreationMode = 'choice' | 'manual' | 'ai';
 type AccountProviderColumn = 'hyperbrowser' | 'browser-use-cloud';
-const SETTINGS_OWNER_EMAIL = 'mark@kahunas.io';
+const SETTINGS_OWNER_EMAIL = (
+  process.env.NEXT_PUBLIC_SETTINGS_OWNER_EMAIL ||
+  'owner@example.com'
+)
+  .trim()
+  .toLowerCase();
 
 function getProviderProfileKey(provider: BrowserProvider): AccountProfileProviderKey {
   return provider === 'browser-use-cloud' ? 'browserUseCloud' : 'hyperbrowser';
@@ -134,10 +139,7 @@ export default function DashboardPage() {
   // Track active test run ID in a ref to avoid stale closure issues
   const activeTestRunIdRef = useRef<string | null>(null);
 
-  // Keep the ref in sync with state
-  useEffect(() => {
-    activeTestRunIdRef.current = state.activeTestRun?.id || null;
-  }, [state.activeTestRun?.id]);
+  // activeTestRunIdRef is set directly in handleRunTests/handleRunSingleTest
 
   // Test execution hook
   const {
@@ -158,7 +160,8 @@ export default function DashboardPage() {
 
   // Update test results in context as they come in (only sync changed results)
   useEffect(() => {
-    if (state.activeTestRun && resultsMap.size > 0) {
+    const runId = activeTestRunIdRef.current;
+    if (runId && resultsMap.size > 0) {
       resultsMap.forEach((result) => {
         // Create a hash of the result status to detect changes
         const resultKey = `${result.testCaseId}-${result.status}-${result.completedAt || ''}`;
@@ -166,18 +169,18 @@ export default function DashboardPage() {
 
         if (lastSynced !== resultKey) {
           syncedResultsRef.current.set(result.testCaseId, resultKey);
-          updateTestResult(state.activeTestRun!.id, result);
+          updateTestResult(runId, result);
         }
       });
     }
-  }, [resultsMap, state.activeTestRun, updateTestResult]);
+  }, [resultsMap, updateTestResult]);
 
-  // Clear synced results when test run ends
+  // Clear synced results when execution ends
   useEffect(() => {
-    if (!state.activeTestRun) {
+    if (!isExecuting) {
       syncedResultsRef.current.clear();
     }
-  }, [state.activeTestRun]);
+  }, [isExecuting]);
 
   // Handle tab changes
   const handleTabChange = useCallback((tab: TabType) => {
@@ -415,7 +418,8 @@ export default function DashboardPage() {
     if (!currentProject || selectedTestIds.size === 0) return;
 
     const testsToRun = testCases.filter((tc) => selectedTestIds.has(tc.id));
-    startTestRun(currentProject.id, testsToRun.map((tc) => tc.id));
+    const run = startTestRun(currentProject.id, testsToRun.map((tc) => tc.id));
+    activeTestRunIdRef.current = run.id;
     setActiveTab('execution');
 
     await executeTests(
@@ -431,7 +435,8 @@ export default function DashboardPage() {
     if (!currentProject) return;
 
     setSelectedTestIds(new Set([testCase.id]));
-    startTestRun(currentProject.id, [testCase.id]);
+    const run = startTestRun(currentProject.id, [testCase.id]);
+    activeTestRunIdRef.current = run.id;
     setActiveTab('execution');
 
     await executeTests(
@@ -445,12 +450,13 @@ export default function DashboardPage() {
 
   const handleStopTests = useCallback(() => {
     cancelExecution();
-    if (state.activeTestRun) {
+    const runId = activeTestRunIdRef.current;
+    if (runId) {
       // Pass current results when cancelling so partial progress is saved
       const currentResults = Array.from(resultsMap.values());
-      completeTestRun(state.activeTestRun.id, 'cancelled', currentResults);
+      completeTestRun(runId, 'cancelled', currentResults);
     }
-  }, [cancelExecution, state.activeTestRun, completeTestRun, resultsMap]);
+  }, [cancelExecution, completeTestRun, resultsMap]);
 
   // Clear all data
   const handleClearData = useCallback(() => {
@@ -668,12 +674,11 @@ export default function DashboardPage() {
 
       case 'execution':
         const selectedTests = testCases.filter((tc) => selectedTestIds.has(tc.id));
-        const summary = state.activeTestRun
-          ? {
-              total: state.activeTestRun.totalTests,
-              passed: state.activeTestRun.passed,
-              failed: state.activeTestRun.failed,
-            }
+        const currentRun = activeTestRunIdRef.current
+          ? state.activeTestRuns[activeTestRunIdRef.current]
+          : null;
+        const summary = currentRun
+          ? { total: currentRun.totalTests, passed: currentRun.passed, failed: currentRun.failed }
           : { total: 0, passed: 0, failed: 0 };
 
         return (

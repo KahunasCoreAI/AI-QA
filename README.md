@@ -20,7 +20,7 @@ Write what you want to test in natural language, and the app spins up real brows
 | UI | [shadcn/ui](https://ui.shadcn.com/) + [Tailwind CSS 4](https://tailwindcss.com/) + [Radix](https://www.radix-ui.com/) |
 | AI | [Vercel AI SDK](https://sdk.vercel.ai/) via [OpenRouter](https://openrouter.ai/) 
 | Browser Execution | [Hyperbrowser SDK](https://docs.hyperbrowser.ai/) + [BrowserUse Cloud API](https://docs.cloud.browser-use.com/) |
-| Auth | [Clerk](https://clerk.com/) (Google SSO, `@kahunas.io` domain-gated) |
+| Auth | [Clerk](https://clerk.com/) (domain-gated, configurable) |
 | Data | [Neon Postgres](https://neon.tech/) + [Drizzle ORM](https://orm.drizzle.team/) |
 | State | React Context + `useReducer`, synchronized with authenticated server state |
 | Language | TypeScript, Zod for runtime validation |
@@ -32,7 +32,7 @@ app/
 ├── page.tsx                      # Main dashboard (projects → tests → execution → history)
 ├── layout.tsx                    # Root layout with QAProvider + theme (light/dark/system)
 ├── sign-in/                      # Clerk sign-in route
-├── unauthorized/                 # Access denied route for non-kahunas.io users
+├── unauthorized/                 # Access denied route for users outside allowed domain
 ├── api/
 │   ├── state/route.ts            # Shared team state load/save API
 │   ├── settings/provider-keys/   # Team-level encrypted provider key management
@@ -66,7 +66,7 @@ types/index.ts                    # All TypeScript interfaces and Zod schemas
 
 ### Team Access Model
 
-- Only authenticated users with `@kahunas.io` email addresses can access the app and APIs.
+- Only authenticated users whose email matches your configured domain can access the app and APIs.
 - Team state is shared across allowed users (projects, tests, accounts, runs, and settings).
 - Browser provider API keys are stored server-side (encrypted at rest), not in localStorage.
 
@@ -107,6 +107,13 @@ DATABASE_URL=
 # Example: openssl rand -base64 32
 APP_ENCRYPTION_KEY=
 
+# Team access policy
+ALLOWED_EMAIL_DOMAIN=example.com
+SHARED_TEAM_ID=team-default
+SETTINGS_OWNER_EMAIL=owner@example.com
+NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN=example.com
+NEXT_PUBLIC_SETTINGS_OWNER_EMAIL=owner@example.com
+
 # Optional provider fallbacks (used if team keys are not configured in Settings)
 HYPERBROWSER_API_KEY=your_hyperbrowser_key
 HYPERBROWSER_MODEL=gemini-2.5-flash
@@ -119,6 +126,12 @@ OPENROUTER_API_KEY=your_openrouter_key
 # Optional — override the default AI model (defaults to openai/gpt-5.2)
 # NEXT_PUBLIC_DEFAULT_AI_MODEL=openai/gpt-5.2
 ```
+
+Configure access policy env vars (required before first deploy):
+
+- `ALLOWED_EMAIL_DOMAIN` / `NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN` — users must have this email domain to access app/API
+- `SHARED_TEAM_ID` — logical shared team key stored in DB
+- `SETTINGS_OWNER_EMAIL` / `NEXT_PUBLIC_SETTINGS_OWNER_EMAIL` — only this user can manage provider keys and the Settings page
 
 Apply database schema before first run:
 
@@ -143,19 +156,75 @@ npm start
 
 ### Deploy on Vercel
 
-1. Create a Neon database and set `DATABASE_URL`.
-2. Create a Clerk app, enable Google sign-in, and set:
-   - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-   - `CLERK_SECRET_KEY`
-3. Add all environment variables from `.env.example` in the Vercel project settings.
-4. Generate an encryption key (`openssl rand -base64 32`) and set `APP_ENCRYPTION_KEY`.
-5. Run migrations against production DB:
+1. Create a Neon Postgres database.
+   - Copy the pooled `DATABASE_URL` and set it in Vercel.
+2. Create a Clerk application.
+   - Enable at least one sign-in method (Google or email/password).
+   - Add your production app domain under Clerk allowed redirect/origin settings.
+   - Copy keys into Vercel:
+     - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+     - `CLERK_SECRET_KEY`
+3. Add all env vars from `.env.example` to your Vercel project.
+   - Generate `APP_ENCRYPTION_KEY` with:
+     - `openssl rand -base64 32`
+4. Set access policy env vars for your team:
+   - `ALLOWED_EMAIL_DOMAIN` and `NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN`
+   - `SETTINGS_OWNER_EMAIL` and `NEXT_PUBLIC_SETTINGS_OWNER_EMAIL`
+   - `SHARED_TEAM_ID`
+5. Run schema push against production DB once:
 
 ```bash
 npm run db:push
 ```
 
-6. Deploy to Vercel. Access is restricted to authenticated `@kahunas.io` users.
+6. Import this repo in Vercel and deploy.
+7. Verify post-deploy:
+   - Sign in with an allowed email
+   - Create one project and one test
+   - Run one test to confirm SSE execution works
+   - Open **History** and refresh the page to verify persisted state loads from DB
+
+## Open Source Quickstart (Local + Production)
+
+Use this checklist when cloning for a new team:
+
+1. Clone + install:
+
+```bash
+git clone <repo-url>
+cd ai-qa
+npm install
+cp .env.example .env
+```
+
+2. Configure `.env` with Clerk, Neon, OpenRouter, and optional provider keys.
+3. Set your team access policy env vars in `.env` (domain, owner email, and team ID).
+4. Initialize schema:
+
+```bash
+npm run db:push
+```
+
+5. Start local app:
+
+```bash
+npm run dev
+```
+
+6. Deploy to Vercel after local verification.
+
+### Clerk Notes
+
+- If Clerk shows **Development mode**, you are using development instance keys.
+- For production, create/use a production Clerk instance and set production publishable/secret keys in Vercel.
+- Ensure your deployed Vercel domain is added in Clerk redirect/origin settings.
+
+### Neon Notes
+
+- This app stores all shared dashboard state in Postgres (`team_state` JSONB) and encrypted provider keys in `team_secrets`.
+- Use separate Neon branches/databases for staging vs production.
+
+For a full deploy checklist, see `docs/DEPLOYMENT.md`.
 
 ## Usage
 

@@ -2,9 +2,24 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { and, eq } from 'drizzle-orm';
 import { getDb, schema } from '@/lib/db/client';
 
-export const ALLOWED_EMAIL_DOMAIN = 'kahunas.io';
-export const SHARED_TEAM_ID = 'team-kahunas';
-export const SETTINGS_OWNER_EMAIL = 'mark@kahunas.io';
+const DEFAULT_ALLOWED_EMAIL_DOMAIN = 'example.com';
+
+function readSetting(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+export const ALLOWED_EMAIL_DOMAIN = readSetting(
+  process.env.ALLOWED_EMAIL_DOMAIN || process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN,
+  DEFAULT_ALLOWED_EMAIL_DOMAIN
+).toLowerCase();
+
+export const SHARED_TEAM_ID = readSetting(process.env.SHARED_TEAM_ID, 'team-default');
+
+export const SETTINGS_OWNER_EMAIL = readSetting(
+  process.env.SETTINGS_OWNER_EMAIL || process.env.NEXT_PUBLIC_SETTINGS_OWNER_EMAIL,
+  `owner@${ALLOWED_EMAIL_DOMAIN}`
+).toLowerCase();
 
 export class AccessError extends Error {
   status: number;
@@ -53,7 +68,7 @@ export async function requireTeamContext() {
     .insert(schema.teams)
     .values({
       id: SHARED_TEAM_ID,
-      name: 'Kahunas Team',
+      name: 'Shared Team',
       allowedEmailDomain: ALLOWED_EMAIL_DOMAIN,
     })
     .onConflictDoNothing();

@@ -1,7 +1,13 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
-const ALLOWED_EMAIL_DOMAIN = 'kahunas.io';
+const ALLOWED_EMAIL_DOMAIN = (
+  process.env.ALLOWED_EMAIL_DOMAIN ||
+  process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN ||
+  'example.com'
+)
+  .trim()
+  .toLowerCase();
 const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/unauthorized']);
 
 function extractEmailFromClaims(claims: Record<string, unknown> | null | undefined): string | null {
@@ -49,4 +55,3 @@ export const config = {
     '/(api|trpc)(.*)',
   ],
 };
-
