@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { useClerk } from '@clerk/nextjs';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -26,6 +27,7 @@ import {
   Globe,
   Pencil,
   Trash2,
+  LogOut,
 } from 'lucide-react';
 import type { Project } from '@/types';
 
@@ -70,6 +72,7 @@ export function DashboardLayout({
   onDeleteProject,
   hasUnseenDrafts = false,
 }: DashboardLayoutProps) {
+  const { signOut } = useClerk();
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -253,24 +256,37 @@ export function DashboardLayout({
               {allNavItems.find((i) => i.id === activeTab)?.label}
             </span>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  'h-8 w-8',
-                  activeTab === 'settings' && 'bg-accent text-foreground'
-                )}
-                onClick={() => onTabChange('settings')}
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              Settings
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    'h-8 w-8',
+                    activeTab === 'settings' && 'bg-accent text-foreground'
+                  )}
+                  onClick={() => onTabChange('settings')}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                Settings
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <LogOut
+                  className="h-3.5 w-3.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => signOut({ redirectUrl: '/sign-in' })}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                Sign out
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </header>
 
         {/* Content */}
