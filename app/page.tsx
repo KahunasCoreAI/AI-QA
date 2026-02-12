@@ -37,11 +37,13 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  Clock,
   Sparkles,
 } from 'lucide-react';
 import type {
   Project,
   TestCase,
+  TestRun,
   TestGroup,
   GeneratedTest,
   BrowserProvider,
@@ -114,6 +116,7 @@ export default function DashboardPage() {
   const [editingTestCase, setEditingTestCase] = useState<TestCase | undefined>();
   const [viewingTestCase, setViewingTestCase] = useState<TestCase | null>(null);
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
+  const [executionViewRunId, setExecutionViewRunId] = useState<string | null>(null);
 
   const currentProject = getCurrentProject();
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
@@ -127,7 +130,10 @@ export default function DashboardPage() {
     () => currentProject ? getTestGroupsForProject(currentProject.id) : [],
     [currentProject, getTestGroupsForProject]
   );
-  const testRuns = currentProject ? getTestRunsForProject(currentProject.id) : [];
+  const testRuns = useMemo(
+    () => currentProject ? getTestRunsForProject(currentProject.id) : [],
+    [currentProject, getTestRunsForProject]
+  );
   const userAccounts = useMemo(
     () => currentProject ? getUserAccountsForProject(currentProject.id) : [],
     [currentProject, getUserAccountsForProject]
@@ -136,51 +142,80 @@ export default function DashboardPage() {
   // Track synced results to avoid infinite loops
   const syncedResultsRef = useRef<Map<string, string>>(new Map());
 
-  // Track active test run ID in a ref to avoid stale closure issues
-  const activeTestRunIdRef = useRef<string | null>(null);
-
-  // activeTestRunIdRef is set directly in handleRunTests/handleRunSingleTest
-
   // Test execution hook
   const {
-    isExecuting,
-    resultsMap,
-    executeTests,
-    cancelExecution,
+    runStates,
+    isAnyExecuting,
+    executeRun,
+    cancelRun,
     skipTest,
-  } = useTestExecution((finalResults) => {
-    // On complete callback - use ref to get current activeTestRun ID
-    const runId = activeTestRunIdRef.current;
-    if (runId) {
-      // Pass final results directly to completeTestRun to avoid timing issues
-      const resultsArray = finalResults ? Array.from(finalResults.values()) : [];
-      completeTestRun(runId, 'completed', resultsArray);
-    }
+  } = useTestExecution((runId, finalResults, status) => {
+    const finalStatus = status === 'cancelled' ? 'cancelled' : status === 'error' ? 'failed' : 'completed';
+    completeTestRun(runId, finalStatus, Array.from(finalResults.values()));
   });
 
   // Update test results in context as they come in (only sync changed results)
   useEffect(() => {
-    const runId = activeTestRunIdRef.current;
-    if (runId && resultsMap.size > 0) {
-      resultsMap.forEach((result) => {
-        // Create a hash of the result status to detect changes
-        const resultKey = `${result.testCaseId}-${result.status}-${result.completedAt || ''}`;
-        const lastSynced = syncedResultsRef.current.get(result.testCaseId);
+    runStates.forEach((runState, runId) => {
+      runState.resultsMap.forEach((result) => {
+        const syncKey = `${runId}:${result.testCaseId}`;
+        const resultKey = `${result.status}-${result.completedAt || ''}`;
+        const lastSynced = syncedResultsRef.current.get(syncKey);
 
         if (lastSynced !== resultKey) {
-          syncedResultsRef.current.set(result.testCaseId, resultKey);
+          syncedResultsRef.current.set(syncKey, resultKey);
           updateTestResult(runId, result);
         }
       });
-    }
-  }, [resultsMap, updateTestResult]);
+    });
+  }, [runStates, updateTestResult]);
 
   // Clear synced results when execution ends
   useEffect(() => {
-    if (!isExecuting) {
+    if (!isAnyExecuting) {
       syncedResultsRef.current.clear();
     }
-  }, [isExecuting]);
+  }, [isAnyExecuting]);
+
+  const activeRuns = useMemo(() => {
+    if (!currentProject) return [];
+    return Object.values(state.activeTestRuns)
+      .filter((run) => run.projectId === currentProject.id)
+      .sort((a, b) => b.startedAt - a.startedAt);
+  }, [currentProject, state.activeTestRuns]);
+
+  const executionRuns = useMemo(() => {
+    const ordered: typeof testRuns = [];
+    const seen = new Set<string>();
+
+    for (const run of activeRuns) {
+      ordered.push(run);
+      seen.add(run.id);
+    }
+
+    for (const run of testRuns) {
+      if (seen.has(run.id)) continue;
+      ordered.push(run);
+      seen.add(run.id);
+      if (ordered.length >= 10) break;
+    }
+
+    return ordered;
+  }, [activeRuns, testRuns]);
+
+  const executionRunById = useMemo(() => {
+    const byId = new Map<string, (typeof executionRuns)[number]>();
+    executionRuns.forEach((run) => byId.set(run.id, run));
+    return byId;
+  }, [executionRuns]);
+
+  const resolvedExecutionViewRunId = useMemo(() => {
+    if (executionRuns.length === 0) return null;
+    if (executionViewRunId && executionRunById.has(executionViewRunId)) {
+      return executionViewRunId;
+    }
+    return executionRuns[0].id;
+  }, [executionRunById, executionRuns, executionViewRunId]);
 
   // Handle tab changes
   const handleTabChange = useCallback((tab: TabType) => {
@@ -234,6 +269,7 @@ export default function DashboardPage() {
     setTestCreationMode(null);
     setViewingTestCase(null);
     setSelectedTestIds(new Set());
+    setExecutionViewRunId(null);
   }, [setCurrentProject]);
 
   // Test case handlers
@@ -414,49 +450,43 @@ export default function DashboardPage() {
 
   // Test execution handlers
 
-  const handleRunTests = useCallback(async () => {
+  const startExecutionRun = useCallback((testsToRun: TestCase[], parallelLimit: number) => {
+    if (!currentProject || testsToRun.length === 0) return;
+
+    const safeParallelLimit = Math.max(1, Math.min(250, parallelLimit));
+    const run = startTestRun(currentProject.id, testsToRun.map((tc) => tc.id), safeParallelLimit);
+    setExecutionViewRunId(run.id);
+    setActiveTab('execution');
+
+    void executeRun({
+      runId: run.id,
+      testCases: testsToRun,
+      websiteUrl: currentProject.websiteUrl,
+      parallelLimit: safeParallelLimit,
+      aiModel: state.settings.aiModel,
+      settings: state.settings,
+    });
+  }, [currentProject, startTestRun, executeRun, state.settings]);
+
+  const handleRunTests = useCallback(() => {
     if (!currentProject || selectedTestIds.size === 0) return;
-
     const testsToRun = testCases.filter((tc) => selectedTestIds.has(tc.id));
-    const run = startTestRun(currentProject.id, testsToRun.map((tc) => tc.id));
-    activeTestRunIdRef.current = run.id;
-    setActiveTab('execution');
+    startExecutionRun(testsToRun, state.settings.parallelLimit);
+  }, [currentProject, selectedTestIds, testCases, startExecutionRun, state.settings.parallelLimit]);
 
-    await executeTests(
-      testsToRun,
-      currentProject.websiteUrl,
-      state.settings.parallelLimit,
-      state.settings.aiModel,
-      state.settings
-    );
-  }, [currentProject, selectedTestIds, testCases, startTestRun, executeTests, state.settings]);
+  const handleRunSingleTest = useCallback((testCase: TestCase) => {
+    startExecutionRun([testCase], 1);
+  }, [startExecutionRun]);
 
-  const handleRunSingleTest = useCallback(async (testCase: TestCase) => {
-    if (!currentProject) return;
+  const handleStopRun = useCallback((runId: string) => {
+    cancelRun(runId);
+  }, [cancelRun]);
 
-    setSelectedTestIds(new Set([testCase.id]));
-    const run = startTestRun(currentProject.id, [testCase.id]);
-    activeTestRunIdRef.current = run.id;
-    setActiveTab('execution');
-
-    await executeTests(
-      [testCase],
-      currentProject.websiteUrl,
-      1,
-      state.settings.aiModel,
-      state.settings
-    );
-  }, [currentProject, startTestRun, executeTests, state.settings]);
-
-  const handleStopTests = useCallback(() => {
-    cancelExecution();
-    const runId = activeTestRunIdRef.current;
-    if (runId) {
-      // Pass current results when cancelling so partial progress is saved
-      const currentResults = Array.from(resultsMap.values());
-      completeTestRun(runId, 'cancelled', currentResults);
-    }
-  }, [cancelExecution, completeTestRun, resultsMap]);
+  const handleRunAgain = useCallback((run: TestRun) => {
+    const testCaseIdSet = new Set(run.testCaseIds);
+    const testsToRun = testCases.filter((tc) => testCaseIdSet.has(tc.id));
+    startExecutionRun(testsToRun, state.settings.parallelLimit);
+  }, [startExecutionRun, state.settings.parallelLimit, testCases]);
 
   // Clear all data
   const handleClearData = useCallback(() => {
@@ -637,18 +667,9 @@ export default function DashboardPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">{currentProject.websiteUrl}</p>
               </div>
               {selectedTestIds.size > 0 && (
-                <Button size="sm" className="h-8 text-xs" onClick={handleRunTests} disabled={isExecuting}>
-                  {isExecuting ? (
-                    <>
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      Running...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="mr-1.5 h-3.5 w-3.5" />
-                      Run {selectedTestIds.size} Tests
-                    </>
-                  )}
+                <Button size="sm" className="h-8 text-xs" onClick={handleRunTests}>
+                  <Play className="mr-1.5 h-3.5 w-3.5" />
+                  Run {selectedTestIds.size} Tests
                 </Button>
               )}
             </div>
@@ -673,12 +694,33 @@ export default function DashboardPage() {
         );
 
       case 'execution':
-        const selectedTests = testCases.filter((tc) => selectedTestIds.has(tc.id));
-        const currentRun = activeTestRunIdRef.current
-          ? state.activeTestRuns[activeTestRunIdRef.current]
+        if (!currentProject) return renderNoProject();
+
+        const selectedRun = resolvedExecutionViewRunId
+          ? executionRunById.get(resolvedExecutionViewRunId) || null
           : null;
-        const summary = currentRun
-          ? { total: currentRun.totalTests, passed: currentRun.passed, failed: currentRun.failed }
+        const selectedRunState = selectedRun ? runStates.get(selectedRun.id) : undefined;
+        const selectedRunIsRunning = selectedRun ? activeRuns.some((run) => run.id === selectedRun.id) : false;
+        const selectedRunTestIds = selectedRun?.testCaseIds?.length
+          ? selectedRun.testCaseIds
+          : (selectedRun?.results || []).map((result) => result.testCaseId);
+        const selectedRunTestIdSet = new Set(selectedRunTestIds);
+        const selectedRunTests = testCases.filter((tc) => selectedRunTestIdSet.has(tc.id));
+        const selectedRunResults = selectedRunState?.resultsMap
+          ?? new Map((selectedRun?.results || []).map((result) => [result.testCaseId, result]));
+        const selectedRunResultList = Array.from(selectedRunResults.values());
+        const runningCount = selectedRunResultList.filter((result) => result.status === 'running').length;
+        const completedCount = selectedRunResultList.filter((result) =>
+          result.status === 'passed' ||
+          result.status === 'failed' ||
+          result.status === 'error' ||
+          result.status === 'skipped'
+        ).length;
+        const queuedCount = selectedRun
+          ? Math.max(selectedRun.totalTests - runningCount - completedCount, 0)
+          : 0;
+        const summary = selectedRun
+          ? { total: selectedRun.totalTests, passed: selectedRun.passed, failed: selectedRun.failed }
           : { total: 0, passed: 0, failed: 0 };
 
         return (
@@ -687,7 +729,7 @@ export default function DashboardPage() {
               <div>
                 <h2 className="text-base font-semibold tracking-tight">Test Execution</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {isExecuting ? 'Running tests...' : 'View test execution results'}
+                  {isAnyExecuting ? 'Running tests...' : 'View test execution results'}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -701,15 +743,24 @@ export default function DashboardPage() {
                     <XCircle className="h-3.5 w-3.5" />
                     <span className="text-xs font-medium tabular-nums">{summary.failed}</span>
                   </div>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted text-muted-foreground">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium tabular-nums">{queuedCount}</span>
+                  </div>
                 </div>
 
-                {isExecuting ? (
-                  <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={handleStopTests}>
+                {selectedRun && selectedRunIsRunning ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => handleStopRun(selectedRun.id)}
+                  >
                     <Square className="mr-1.5 h-3.5 w-3.5" />
                     Stop
                   </Button>
-                ) : selectedTestIds.size > 0 ? (
-                  <Button size="sm" className="h-8 text-xs" onClick={handleRunTests}>
+                ) : selectedRun && selectedRunTests.length > 0 ? (
+                  <Button size="sm" className="h-8 text-xs" onClick={() => handleRunAgain(selectedRun)}>
                     <Play className="mr-1.5 h-3.5 w-3.5" />
                     Run Again
                   </Button>
@@ -717,13 +768,57 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <TestExecutionGrid
-              testCases={selectedTests}
-              results={resultsMap}
-              isRunning={isExecuting}
-              onSkipTest={skipTest}
-              userAccounts={userAccounts}
-            />
+            {executionRuns.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {executionRuns.map((run) => {
+                  const runState = runStates.get(run.id);
+                  const isRunning = activeRuns.some((activeRun) => activeRun.id === run.id);
+                  const statusLabel = isRunning
+                    ? 'Running'
+                    : run.status === 'failed'
+                    ? 'Failed'
+                    : run.status === 'cancelled'
+                    ? 'Cancelled'
+                    : 'Completed';
+
+                  return (
+                    <Button
+                      key={run.id}
+                      size="sm"
+                      variant={resolvedExecutionViewRunId === run.id ? 'default' : 'outline'}
+                      className="h-7 text-[11px]"
+                      onClick={() => setExecutionViewRunId(run.id)}
+                    >
+                      {isRunning && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      Run {run.id.slice(-6)} · {statusLabel}
+                      {runState?.error ? ' · Error' : ''}
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
+
+            {selectedRun ? (
+              <TestExecutionGrid
+                testCases={selectedRunTests}
+                results={selectedRunResults}
+                isRunning={selectedRunIsRunning}
+                onSkipTest={
+                  selectedRunIsRunning
+                    ? (testCaseId) => skipTest(selectedRun.id, testCaseId)
+                    : undefined
+                }
+                userAccounts={userAccounts}
+              />
+            ) : (
+              <Card className="border-border/40">
+                <CardContent className="py-10 text-center">
+                  <p className="text-xs text-muted-foreground">
+                    No runs available. Start tests from the Test Cases tab.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </div>
         );
 

@@ -259,7 +259,7 @@ For a full deploy checklist, see `docs/DEPLOYMENT.md`.
 ### Settings
 
 - **AI Model** — select from preset OpenRouter models (GPT-5.2, Claude Opus 4.6, Claude Sonnet 4.5, Gemini 3 Flash Preview) or enter any custom OpenRouter model ID. The chosen model is used for all AI features: test generation, result analysis, and bug reports.
-- **Parallel limit** — how many browser sessions run concurrently (1–10).
+- **Parallel limit** — how many browser sessions run concurrently (1–250).
 - **Browser provider** — switch execution backend (`Hyperbrowser Browser-Use`, `Hyperbrowser HyperAgent`, `BrowserUse Cloud`).
 - **Hyperbrowser model** — model used by Hyperbrowser Browser-Use and HyperAgent providers.
 - **BrowserUse Cloud model** — model used only by BrowserUse Cloud tasks (default `browser-use-llm`). Aliases like `BROWSER_USE_1.0` are accepted and normalized automatically.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { TestCase, TestResult, TestEvent, QASettings } from '@/types';
 
 /**
@@ -43,20 +43,46 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
 /**
  * Hook for managing test execution with SSE
  */
-export function useTestExecution(onComplete?: (finalResults: Map<string, TestResult>) => void) {
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [results, setResults] = useState<Map<string, TestResult>>(new Map());
-  const [error, setError] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const resultsRef = useRef<Map<string, TestResult>>(new Map());
+export type ExecutionRunStatus = 'running' | 'completed' | 'cancelled' | 'error';
 
-  // Define handleTestEvent before executeTests so it can be used as a dependency
-  const handleTestEvent = useCallback((event: TestEvent) => {
+interface ExecutionRunState {
+  status: ExecutionRunStatus;
+  resultsMap: Map<string, TestResult>;
+  error: string | null;
+  startedAt: number;
+  completedAt?: number;
+}
+
+interface ExecuteRunInput {
+  runId: string;
+  testCases: TestCase[];
+  websiteUrl: string;
+  parallelLimit: number;
+  aiModel: string;
+  settings: QASettings;
+}
+
+export function useTestExecution(
+  onComplete?: (
+    runId: string,
+    finalResults: Map<string, TestResult>,
+    status: Exclude<ExecutionRunStatus, 'running'>
+  ) => void
+) {
+  const [runStates, setRunStates] = useState<Map<string, ExecutionRunState>>(new Map());
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const resultsRef = useRef<Map<string, Map<string, TestResult>>>(new Map());
+
+  const handleTestEvent = useCallback((runId: string, event: TestEvent) => {
     const { testCaseId, data } = event;
 
-    setResults((prev) => {
-      const newResults = new Map(prev);
-      const existing = newResults.get(testCaseId) || {
+    setRunStates((prev) => {
+      const run = prev.get(runId);
+      if (!run) return prev;
+
+      const next = new Map(prev);
+      const updatedResults = new Map(run.resultsMap);
+      const existing = updatedResults.get(testCaseId) || {
         id: `result-${testCaseId}`,
         testCaseId,
         status: 'running' as const,
@@ -65,7 +91,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
 
       switch (event.type) {
         case 'test_start':
-          newResults.set(testCaseId, {
+          updatedResults.set(testCaseId, {
             ...existing,
             status: 'running' as const,
             startedAt: event.timestamp,
@@ -73,7 +99,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
           break;
 
         case 'streaming_url':
-          newResults.set(testCaseId, {
+          updatedResults.set(testCaseId, {
             ...existing,
             streamingUrl: data?.streamingUrl,
             ...(data?.recordingUrl ? { recordingUrl: data.recordingUrl } : {}),
@@ -81,7 +107,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
           break;
 
         case 'step_progress':
-          newResults.set(testCaseId, {
+          updatedResults.set(testCaseId, {
             ...existing,
             currentStep: data?.currentStep,
             totalSteps: data?.totalSteps,
@@ -91,45 +117,59 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
 
         case 'test_complete':
           if (data?.result) {
-            newResults.set(testCaseId, data.result);
-            // Also update the ref for immediate access
-            resultsRef.current.set(testCaseId, data.result);
+            updatedResults.set(testCaseId, data.result);
           }
           break;
 
-        case 'test_error': {
-          const errorResult = {
+        case 'test_error':
+          updatedResults.set(testCaseId, {
             ...existing,
             status: 'error' as const,
             error: data?.error,
             completedAt: event.timestamp,
-          };
-          newResults.set(testCaseId, errorResult);
-          // Also update the ref for immediate access
-          resultsRef.current.set(testCaseId, errorResult);
+          });
           break;
-        }
+
+        default:
+          break;
       }
 
-      return newResults;
+      resultsRef.current.set(runId, updatedResults);
+      next.set(runId, {
+        ...run,
+        resultsMap: updatedResults,
+      });
+      return next;
     });
   }, []);
 
-  const executeTests = useCallback(async (
-    testCases: TestCase[],
-    websiteUrl: string,
-    parallelLimit: number,
-    aiModel: string,
-    settings: QASettings
-  ) => {
-    if (isExecuting) return;
+  const executeRun = useCallback(async ({
+    runId,
+    testCases,
+    websiteUrl,
+    parallelLimit,
+    aiModel,
+    settings,
+  }: ExecuteRunInput) => {
+    if (abortControllersRef.current.has(runId)) return;
 
-    setIsExecuting(true);
-    setError(null);
-    setResults(new Map());
-    resultsRef.current = new Map();
+    const controller = new AbortController();
+    abortControllersRef.current.set(runId, controller);
+    resultsRef.current.set(runId, new Map());
 
-    abortControllerRef.current = new AbortController();
+    setRunStates((prev) => {
+      const next = new Map(prev);
+      next.set(runId, {
+        status: 'running',
+        resultsMap: new Map(),
+        error: null,
+        startedAt: Date.now(),
+      });
+      return next;
+    });
+
+    let completionStatus: Exclude<ExecutionRunStatus, 'running'> = 'completed';
+    let errorMessage: string | null = null;
 
     try {
       const response = await fetch('/api/execute-tests', {
@@ -142,7 +182,7 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
           aiModel,
           settings,
         }),
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -166,66 +206,111 @@ export function useTestExecution(onComplete?: (finalResults: Map<string, TestRes
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: TestEvent = JSON.parse(line.slice(6));
-              handleTestEvent(event);
-            } catch (e) {
-              console.error('Failed to parse SSE event:', e);
-            }
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event: TestEvent = JSON.parse(line.slice(6));
+            handleTestEvent(runId, event);
+          } catch (e) {
+            console.error('Failed to parse SSE event:', e);
           }
         }
       }
-
-      // Pass the final results to onComplete
-      onComplete?.(resultsRef.current);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        console.log('Test execution cancelled');
+        completionStatus = 'cancelled';
       } else {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        setError(message);
+        completionStatus = 'error';
+        errorMessage = err instanceof Error ? err.message : 'Unknown error';
       }
     } finally {
-      setIsExecuting(false);
-      abortControllerRef.current = null;
-    }
-  }, [isExecuting, onComplete, handleTestEvent]);
+      abortControllersRef.current.delete(runId);
 
-  const cancelExecution = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+      const finalResults = new Map(resultsRef.current.get(runId) ?? []);
+      setRunStates((prev) => {
+        const run = prev.get(runId);
+        if (!run) return prev;
+        const next = new Map(prev);
+        next.set(runId, {
+          ...run,
+          status: completionStatus,
+          error: errorMessage,
+          completedAt: Date.now(),
+        });
+        return next;
+      });
+
+      onComplete?.(runId, finalResults, completionStatus);
     }
+  }, [handleTestEvent, onComplete]);
+
+  const cancelRun = useCallback((runId: string) => {
+    const controller = abortControllersRef.current.get(runId);
+    if (!controller) return;
+
+    setRunStates((prev) => {
+      const run = prev.get(runId);
+      if (!run) return prev;
+      const next = new Map(prev);
+      next.set(runId, {
+        ...run,
+        status: 'cancelled',
+      });
+      return next;
+    });
+
+    controller.abort();
   }, []);
 
-  const getResult = useCallback((testCaseId: string): TestResult | undefined => {
-    return results.get(testCaseId);
-  }, [results]);
+  const skipTest = useCallback((runId: string, testCaseId: string) => {
+    setRunStates((prev) => {
+      const run = prev.get(runId);
+      if (!run) return prev;
 
-  const skipTest = useCallback((testCaseId: string) => {
-    setResults((prev) => {
-      const newResults = new Map(prev);
-      const existing = newResults.get(testCaseId);
-      if (existing && (existing.status === 'running' || existing.status === 'pending')) {
-        newResults.set(testCaseId, {
-          ...existing,
-          status: 'skipped',
-          completedAt: Date.now(),
-          duration: existing.startedAt ? Date.now() - existing.startedAt : 0,
-        });
+      const next = new Map(prev);
+      const updatedResults = new Map(run.resultsMap);
+      const existing = updatedResults.get(testCaseId);
+      if (!existing || (existing.status !== 'running' && existing.status !== 'pending')) {
+        return prev;
       }
-      return newResults;
+
+      updatedResults.set(testCaseId, {
+        ...existing,
+        status: 'skipped',
+        completedAt: Date.now(),
+        duration: existing.startedAt ? Date.now() - existing.startedAt : 0,
+      });
+      resultsRef.current.set(runId, updatedResults);
+
+      next.set(runId, {
+        ...run,
+        resultsMap: updatedResults,
+      });
+      return next;
     });
   }, []);
 
+  const activeRunIds = useMemo(() => {
+    return Array.from(runStates.entries())
+      .filter(([, run]) => run.status === 'running')
+      .map(([runId]) => runId);
+  }, [runStates]);
+
+  const getRunState = useCallback((runId: string): ExecutionRunState | undefined => {
+    return runStates.get(runId);
+  }, [runStates]);
+
+  const getRunResults = useCallback((runId: string): Map<string, TestResult> => {
+    return runStates.get(runId)?.resultsMap ?? new Map();
+  }, [runStates]);
+
   return {
-    isExecuting,
-    results: Array.from(results.values()),
-    resultsMap: results,
-    error,
-    executeTests,
-    cancelExecution,
-    getResult,
+    runStates,
+    activeRunIds,
+    isAnyExecuting: activeRunIds.length > 0,
+    executeRun,
+    cancelRun,
+    getRunState,
+    getRunResults,
     skipTest,
   };
 }

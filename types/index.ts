@@ -89,6 +89,8 @@ export interface TestRun {
   startedAt: number;
   completedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
+  testCaseIds: string[];
+  parallelLimit: number;
   totalTests: number;
   passed: number;
   failed: number;

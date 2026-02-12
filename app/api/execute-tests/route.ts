@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
       });
 
       // Validate and sanitize parallelLimit to prevent infinite loops
-      const parallelLimit = Math.max(1, Math.min(10, Math.floor(Number(body.parallelLimit) || 3)));
+      const parallelLimit = Math.max(1, Math.min(250, Math.floor(Number(body.parallelLimit) || 3)));
 
       if (!testCases || testCases.length === 0) {
         await sendEvent({

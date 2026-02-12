@@ -325,7 +325,8 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
 
       // Remove the completed run from activeTestRuns
-      const { [action.payload.runId]: _removed, ...remainingActiveRuns } = state.activeTestRuns;
+      const remainingActiveRuns = { ...state.activeTestRuns };
+      delete remainingActiveRuns[action.payload.runId];
 
       const projectId = completedRun.projectId;
       const existingRuns = state.testRuns[projectId] || [];
@@ -648,10 +649,12 @@ function reducer(state: QAState, action: QAAction): QAState {
 
     case 'UPDATE_SETTINGS': {
       const mergedSettings = { ...state.settings, ...action.payload };
+      const parallelLimit = Math.max(1, Math.min(250, Math.floor(Number(mergedSettings.parallelLimit) || 3)));
       return {
         ...state,
         settings: {
           ...mergedSettings,
+          parallelLimit,
           browserProvider:
             mergedSettings.hyperbrowserEnabled === false &&
             mergedSettings.browserProvider !== 'browser-use-cloud'
@@ -719,7 +722,7 @@ interface QAContextType {
   deleteUserAccount: (id: string, projectId: string) => void;
   getUserAccountsForProject: (projectId: string) => UserAccount[];
   // Test run actions
-  startTestRun: (projectId: string, testCaseIds: string[]) => TestRun;
+  startTestRun: (projectId: string, testCaseIds: string[], parallelLimit: number) => TestRun;
   updateTestResult: (runId: string, result: TestResult) => void;
   completeTestRun: (runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => void;
   deleteTestResult: (runId: string, projectId: string, resultId: string) => void;
@@ -960,12 +963,14 @@ export function QAProvider({ children }: { children: ReactNode }) {
   }, [state.userAccounts]);
 
   // Test run actions
-  const startTestRun = useCallback((projectId: string, testCaseIds: string[]): TestRun => {
+  const startTestRun = useCallback((projectId: string, testCaseIds: string[], parallelLimit: number): TestRun => {
     const run: TestRun = {
       id: generateId(),
       projectId,
       startedAt: Date.now(),
       status: 'running',
+      testCaseIds: [...testCaseIds],
+      parallelLimit,
       totalTests: testCaseIds.length,
       passed: 0,
       failed: 0,

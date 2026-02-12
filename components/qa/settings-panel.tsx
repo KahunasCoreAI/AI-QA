@@ -260,21 +260,24 @@ export function SettingsPanel({
               <Label htmlFor="parallelLimit" className="text-xs font-medium">Parallel Test Limit</Label>
               <Select
                 value={settings.parallelLimit.toString()}
-                onValueChange={(v) => onSettingsChange({ parallelLimit: parseInt(v) })}
+                onValueChange={(v) => onSettingsChange({ parallelLimit: parseInt(v, 10) })}
               >
                 <SelectTrigger id="parallelLimit" className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1">1 (Sequential)</SelectItem>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="3">3</SelectItem>
-                  <SelectItem value="5">5</SelectItem>
-                  <SelectItem value="10">10</SelectItem>
+                  {Array.from({ length: 250 }, (_, index) => {
+                    const value = index + 1;
+                    return (
+                      <SelectItem key={value} value={value.toString()}>
+                        {value === 1 ? '1 (Sequential)' : value}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground/60">
-                Number of tests to run simultaneously
+                Number of tests to run simultaneously (1-250). Additional selected tests are queued.
               </p>
             </div>
 

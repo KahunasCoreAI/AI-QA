@@ -49,6 +49,7 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
   };
   const settings = {
     ...mergedSettings,
+    parallelLimit: Math.max(1, Math.min(250, Math.floor(Number(mergedSettings.parallelLimit) || 3))),
     browserProvider:
       mergedSettings.hyperbrowserEnabled === false &&
       mergedSettings.browserProvider !== 'browser-use-cloud'
