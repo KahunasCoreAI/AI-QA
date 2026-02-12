@@ -27,6 +27,7 @@ interface TestResultsTableProps {
   userAccounts: UserAccount[];
   projectUrl: string;
   aiModel: string;
+  onOpenSettings?: () => void;
   onPatchResult?: (
     runId: string,
     resultId: string,
@@ -146,6 +147,7 @@ export function TestResultsTable({
   userAccounts,
   projectUrl,
   aiModel,
+  onOpenSettings,
   onPatchResult,
   onDeleteResult,
   onClearAllRuns,
@@ -198,6 +200,7 @@ export function TestResultsTable({
   // Bug report generation
   const generateBugReport = async (result: TestResult, testCase: TestCase) => {
     setIsGenerating(true);
+    setLinearMessage(null);
     try {
       const response = await fetch('/api/generate-report', {
         method: 'POST',
@@ -303,6 +306,12 @@ export function TestResultsTable({
 
   // Sheet detail data
   const selectedTestCase = selectedResult ? getTestCase(selectedResult.testCaseId) : null;
+  const canCreateLinearFromDialog =
+    Boolean(bugReport) &&
+    Boolean(selectedResult) &&
+    Boolean(selectedTestCase) &&
+    (selectedResult?.status === 'failed' || selectedResult?.status === 'error');
+  const hasLinkedLinearIssue = Boolean(selectedResult?.linearIssueIdentifier && selectedResult?.linearIssueUrl);
   const selectedExtractedData = selectedResult?.extractedData;
   const providerSummary = getProviderSummary(selectedExtractedData);
   const userFacingDataEntries = selectedExtractedData
@@ -831,20 +840,60 @@ export function TestResultsTable({
               )}
 
               <div className="flex justify-end pt-2">
-                <Button size="sm" className="h-7 text-xs" onClick={copyReport}>
-                  {copied ? (
-                    <>
-                      <Check className="mr-1.5 h-3 w-3" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="mr-1.5 h-3 w-3" />
-                      Copy as Markdown
-                    </>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {canCreateLinearFromDialog && selectedResult && selectedTestCase ? (
+                    hasLinkedLinearIssue ? (
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => window.open(selectedResult.linearIssueUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        <Link2 className="mr-1.5 h-3 w-3" />
+                        Open Linear Ticket
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => createLinearIssue(selectedResult, selectedTestCase, selectedResult.runId)}
+                        disabled={isCreatingLinear}
+                      >
+                        <Link2 className="mr-1.5 h-3 w-3" />
+                        {isCreatingLinear ? 'Creating Ticket…' : 'Create Linear Ticket'}
+                      </Button>
+                    )
+                  ) : null}
+
+                  {onOpenSettings && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={onOpenSettings}
+                    >
+                      Open Settings
+                    </Button>
                   )}
-                </Button>
+
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={copyReport}>
+                    {copied ? (
+                      <>
+                        <Check className="mr-1.5 h-3 w-3" />
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-1.5 h-3 w-3" />
+                        Copy Markdown
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
+
+              {linearMessage && (
+                <p className="text-[11px] text-muted-foreground/80 pt-1">{linearMessage}</p>
+              )}
             </div>
           )}
         </DialogContent>

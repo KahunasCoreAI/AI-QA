@@ -6,6 +6,12 @@ export interface LinearTeam {
   key?: string;
 }
 
+interface LinearTeamState {
+  id: string;
+  name: string;
+  type?: string;
+}
+
 export interface LinearIssue {
   id: string;
   identifier: string;
@@ -109,6 +115,7 @@ export async function createIssueInLinear(
     title: string;
     description: string;
     priority?: number;
+    stateId?: string;
   }
 ): Promise<LinearIssue> {
   const data = await linearGraphQLRequest<{
@@ -140,6 +147,7 @@ export async function createIssueInLinear(
         title: input.title,
         description: input.description,
         ...(typeof input.priority === 'number' ? { priority: input.priority } : {}),
+        ...(typeof input.stateId === 'string' ? { stateId: input.stateId } : {}),
       },
     }
   );
@@ -155,4 +163,49 @@ export async function createIssueInLinear(
     title: issue.title,
     url: issue.url,
   };
+}
+
+export async function getTeamBacklogStateId(
+  apiKey: string,
+  teamId: string
+): Promise<string> {
+  const data = await linearGraphQLRequest<{
+    team?: {
+      states?: {
+        nodes?: Array<{ id?: string; name?: string; type?: string | null }>;
+      };
+    };
+  }>(
+    apiKey,
+    `query TeamStates($teamId: String!) {
+      team(id: $teamId) {
+        states {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      }
+    }`,
+    { teamId }
+  );
+
+  const states: LinearTeamState[] = (data.team?.states?.nodes || [])
+    .filter((state): state is { id: string; name: string; type?: string | null } => {
+      return Boolean(state.id && state.name);
+    })
+    .map((state) => ({
+      id: state.id,
+      name: state.name,
+      type: state.type || undefined,
+    }));
+
+  const backlogByName = states.find((state) => state.name.toLowerCase() === 'backlog');
+  if (backlogByName) return backlogByName.id;
+
+  const backlogByType = states.find((state) => state.type?.toLowerCase() === 'backlog');
+  if (backlogByType) return backlogByType.id;
+
+  throw new LinearApiError("No 'Backlog' workflow state was found for the selected team.", 400);
 }

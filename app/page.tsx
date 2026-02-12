@@ -997,6 +997,7 @@ export default function DashboardPage() {
                 userAccounts={userAccounts}
                 projectUrl={currentProject.websiteUrl}
                 aiModel={state.settings.aiModel}
+                onOpenSettings={() => setActiveTab('settings')}
                 onPatchResult={(runId, resultId, updates) =>
                   patchTestResult(runId, currentProject.id, resultId, updates)
                 }

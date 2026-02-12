@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateBugReport } from '@/lib/ai-client';
 import type { BugReport, TestCase, TestResult } from '@/types';
 import { enforceRateLimit } from '@/lib/security/rate-limit';
-import { createIssueInLinear, LinearApiError } from '@/lib/server/linear-client';
+import { createIssueInLinear, getTeamBacklogStateId, LinearApiError } from '@/lib/server/linear-client';
 import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext } from '@/lib/server/team-context';
 import { getUserLinearConfig } from '@/lib/server/user-secrets-store';
@@ -30,20 +30,7 @@ function getProjectHost(projectUrl: string): string {
   }
 }
 
-function severityToLinearPriority(severity: BugReport['severity']): number {
-  switch (severity) {
-    case 'critical':
-      return 1;
-    case 'high':
-      return 2;
-    case 'medium':
-      return 3;
-    case 'low':
-      return 4;
-    default:
-      return 3;
-  }
-}
+const LINEAR_PRIORITY_HIGH = 2;
 
 function buildFallbackBugReport(testCase: TestCase, failedTest: TestResult): BugReport {
   return {
@@ -169,11 +156,14 @@ export async function POST(request: NextRequest) {
       projectUrl,
     });
 
+    const backlogStateId = await getTeamBacklogStateId(linearConfig.apiKey, linearConfig.defaultTeamId);
+
     const issue = await createIssueInLinear(linearConfig.apiKey, {
       teamId: linearConfig.defaultTeamId,
       title,
       description,
-      priority: severityToLinearPriority(bugReport.severity),
+      priority: LINEAR_PRIORITY_HIGH,
+      stateId: backlogStateId,
     });
 
     return NextResponse.json({
