@@ -1066,12 +1066,19 @@ export default function DashboardPage() {
               <div>
                 <h2 className="text-base font-semibold tracking-tight">Settings</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Contact Mark
+                  Settings are restricted to the workspace owner.
                 </p>
               </div>
               <Card className="border-border/40">
                 <CardContent className="py-8">
-                  <p className="text-sm text-muted-foreground">Contact Mark</p>
+                  <p className="text-sm text-muted-foreground">
+                    Only the designated settings owner ({SETTINGS_OWNER_EMAIL}) can manage this page.
+                    {currentUserEmail && (
+                      <span className="block mt-1 text-xs text-muted-foreground/60">
+                        Signed in as {currentUserEmail}
+                      </span>
+                    )}
+                  </p>
                 </CardContent>
               </Card>
             </div>

@@ -15,7 +15,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertTriangle, Trash2 } from 'lucide-react';
-import { useTheme } from 'next-themes';
 import type { QASettings } from '@/types';
 
 const PRESET_MODELS = [
@@ -58,9 +57,6 @@ export function SettingsPanel({
   });
   const [isSavingProviderKeys, setIsSavingProviderKeys] = useState(false);
   const [providerKeyMessage, setProviderKeyMessage] = useState<string | null>(null);
-  const { theme, setTheme, resolvedTheme } = useTheme();
-  const themeValue = theme ?? 'system';
-  const resolvedThemeValue = resolvedTheme;
 
   useEffect(() => {
     let isCancelled = false;
@@ -130,39 +126,6 @@ export function SettingsPanel({
 
   return (
     <div className="space-y-4 max-w-2xl">
-      {/* Appearance */}
-      <Card className="border-border/40">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold tracking-tight">Appearance</CardTitle>
-          <CardDescription className="text-xs">
-            Choose how the dashboard looks. System follows your OS appearance.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5" suppressHydrationWarning>
-            <Label htmlFor="theme" className="text-xs font-medium">Theme</Label>
-            <Select
-              value={themeValue}
-              onValueChange={(v) => setTheme(v)}
-            >
-              <SelectTrigger id="theme" className="h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="system">System</SelectItem>
-                <SelectItem value="light">Light</SelectItem>
-                <SelectItem value="dark">Dark</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground/60">
-              {themeValue === 'system' && resolvedThemeValue
-                ? `System currently: ${resolvedThemeValue}`
-                : 'Saved per browser on this device.'}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* AI Model Settings */}
       <Card className="border-border/40">
         <CardHeader className="pb-3">

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useClerk } from '@clerk/nextjs';
+import { useTheme } from 'next-themes';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -28,6 +29,8 @@ import {
   Pencil,
   Trash2,
   LogOut,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import type { Project } from '@/types';
 
@@ -73,7 +76,17 @@ export function DashboardLayout({
   hasUnseenDrafts = false,
 }: DashboardLayoutProps) {
   const { signOut } = useClerk();
+  const { theme, setTheme, resolvedTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
+
+  const cycleTheme = () => {
+    const current = theme ?? 'system';
+    const next = current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light';
+    setTheme(next);
+  };
+
+  const themeLabel =
+    theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : `System (${resolvedTheme ?? '…'})`;
 
   return (
     <div className="flex h-screen bg-background">
@@ -256,7 +269,25 @@ export function DashboardLayout({
               {allNavItems.find((i) => i.id === activeTab)?.label}
             </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1" suppressHydrationWarning>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {resolvedTheme === 'dark' ? (
+                  <Moon
+                    className="h-3.5 w-3.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={cycleTheme}
+                  />
+                ) : (
+                  <Sun
+                    className="h-3.5 w-3.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={cycleTheme}
+                  />
+                )}
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {themeLabel}
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
