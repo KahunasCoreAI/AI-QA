@@ -13,6 +13,7 @@ import {
   TestResultsTable,
   SettingsPanel,
   AITestGenerator,
+  AiExplorationCard,
   CreateGroupDialog,
   UserAccountsManager,
 } from '@/components/qa';
@@ -903,36 +904,24 @@ export default function DashboardPage() {
             </div>
 
             {aiGenerationJobs.length > 0 && (
-              <Card className="border-border/40">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-semibold tracking-tight">AI Exploration Jobs</CardTitle>
-                  <CardDescription className="text-xs">
-                    Fire-and-forget generation status for draft test case exploration.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {aiGenerationJobs.slice(0, 8).map((job) => {
-                    const isRunning = job.status === 'queued' || job.status === 'running';
-                    return (
-                      <div
-                        key={job.id}
-                        className="flex items-center justify-between rounded-md border border-border/40 px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium truncate">{job.prompt}</p>
-                          <p className="text-[11px] text-muted-foreground truncate">
-                            {job.progressMessage || (job.status === 'failed' ? job.error : '') || 'Awaiting updates'}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
-                          <span className="text-[11px] capitalize text-muted-foreground">{job.status}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </CardContent>
-              </Card>
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold tracking-tight">AI Exploration</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Browser exploration sessions for test case generation
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {aiGenerationJobs
+                    .filter(job => job.status === 'running' || job.status === 'queued' ||
+                            (job.status === 'completed' && job.completedAt && Date.now() - job.completedAt < 300000) ||
+                            (job.status === 'failed' && job.completedAt && Date.now() - job.completedAt < 300000))
+                    .slice(0, 6)
+                    .map(job => (
+                      <AiExplorationCard key={job.id} job={job} />
+                    ))}
+                </div>
+              </div>
             )}
 
             {executionRuns.length > 0 && (

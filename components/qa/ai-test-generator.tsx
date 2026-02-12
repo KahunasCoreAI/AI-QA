@@ -46,7 +46,7 @@ export function AITestGenerator({
   const activeStatus = useMemo(() => {
     if (!activeJob) return null;
     if (activeJob.status === 'queued' || activeJob.status === 'running') {
-      return activeJob.progressMessage || 'AI is exploring your app to determine test cases.';
+      return activeJob.progressMessage || 'AI is exploring your app to determine test cases. You can close this screen.';
     }
     if (activeJob.status === 'completed') {
       return `Exploration finished. ${activeJob.draftCount} draft test case${activeJob.draftCount === 1 ? '' : 's'} ready.`;
@@ -84,7 +84,7 @@ export function AITestGenerator({
         throw new Error(data?.error || 'Failed to queue AI exploration.');
       }
 
-      setSuccessMessage(data?.message || 'AI is exploring your app to determine test cases.');
+      setSuccessMessage(data?.message || 'AI is exploring your app to determine test cases. You can close this screen.');
       onJobQueued();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to queue AI exploration.');

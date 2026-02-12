@@ -11,3 +11,4 @@ export { AITestGenerator } from './ai-test-generator';
 export { CreateGroupDialog } from './create-group-dialog';
 export { TestGroupCard } from './test-group-card';
 export { UserAccountsManager } from './user-accounts-manager';
+export { AiExplorationCard } from './ai-exploration-card';

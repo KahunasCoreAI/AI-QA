@@ -26,7 +26,7 @@ interface ExecutionCredentials {
 }
 
 const RUNNING_STALE_MS = 10 * 60 * 1000;
-const MAX_GENERATED_TESTS = 25;
+const MAX_GENERATED_TESTS = 10;
 
 const generatedTestSchema = z.object({
   title: z.string().min(1),
@@ -279,7 +279,7 @@ ${explorationSummary}
 Exploration details:
 ${JSON.stringify(explorationData || {}, null, 2)}
 
-Generate a comprehensive but non-duplicative set of QA test cases for this scope.
+Generate up to 10 comprehensive but non-duplicative QA test cases for this scope.
 Return JSON: { "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "..." }] }`;
 }
 
@@ -332,7 +332,7 @@ async function claimNextJob(
       status: 'running',
       startedAt: job.startedAt || now,
       error: undefined,
-      progressMessage: 'AI agent launched. Exploring application flows.',
+      progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
     })
   );
 
@@ -352,7 +352,7 @@ async function claimNextJob(
     status: 'running',
     startedAt: chosenJob.startedAt || now,
     error: undefined,
-    progressMessage: 'AI agent launched. Exploring application flows.',
+    progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
   };
 }
 
@@ -397,6 +397,7 @@ async function completeJobWithDrafts(
     ...job,
     status: 'completed',
     completedAt: Date.now(),
+    streamingUrl: undefined,
     progressMessage: 'Exploration complete. Draft test cases are ready for review.',
     draftCount: drafts.filter((draft) => draft.status === 'draft').length,
     duplicateCount,
@@ -434,6 +435,7 @@ async function failJob(
     completedAt: Date.now(),
     error: message,
     progressMessage: undefined,
+    streamingUrl: undefined,
   });
 }
 
@@ -472,7 +474,7 @@ async function runClaimedJob(teamId: string, userId: string, job: AiGenerationJo
   const credentials = resolveAccountCredentials(selectedAccount, settings);
 
   await updateJob(teamId, userId, job.projectId, job.id, {
-    progressMessage: 'AI agent is navigating the app and collecting flow coverage.',
+    progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
   });
 
   const explorationTask = buildExplorationTask(job.prompt, project.websiteUrl, job.groupName, credentials);
@@ -485,7 +487,19 @@ async function runClaimedJob(teamId: string, userId: string, job: AiGenerationJo
         settings,
         credentials,
       },
-      {}
+      {
+        onLiveUrl: async (liveUrl: string, recordingUrl?: string) => {
+          await updateJob(teamId, userId, job.projectId, job.id, {
+            streamingUrl: liveUrl,
+            recordingUrl: recordingUrl,
+          });
+        },
+        onTaskCreated: async (taskId: string, sessionId: string) => {
+          await updateJob(teamId, userId, job.projectId, job.id, {
+            progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
+          });
+        },
+      }
     );
 
     if (execution.status === 'error' || !execution.verdict) {
@@ -494,6 +508,8 @@ async function runClaimedJob(teamId: string, userId: string, job: AiGenerationJo
 
     await updateJob(teamId, userId, job.projectId, job.id, {
       progressMessage: 'Exploration complete. Synthesizing draft tests.',
+      streamingUrl: undefined,
+      recordingUrl: execution.recordingUrl || job.recordingUrl,
     });
 
     if (!process.env.OPENROUTER_API_KEY) {
@@ -629,7 +645,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         jobId: job.id,
-        message: 'AI is exploring your app to determine test cases.',
+        message: 'AI is exploring your app to determine test cases. You can close this screen.',
       },
       { status: 202 }
     );

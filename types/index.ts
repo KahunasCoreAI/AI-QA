@@ -149,6 +149,8 @@ export interface AiGenerationJob {
   completedAt?: number;
   error?: string;
   progressMessage?: string;
+  streamingUrl?: string;   // ephemeral live view URL during exploration
+  recordingUrl?: string;   // persistent recording URL after exploration
   draftCount: number;
   duplicateCount: number;
 }
