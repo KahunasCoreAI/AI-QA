@@ -294,12 +294,12 @@ export function DashboardLayout({
                   variant="ghost"
                   size="icon"
                   className={cn(
-                    'h-8 w-8',
+                    'h-8 w-8 text-muted-foreground hover:text-foreground',
                     activeTab === 'settings' && 'bg-accent text-foreground'
                   )}
                   onClick={() => onTabChange('settings')}
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">

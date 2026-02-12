@@ -4,6 +4,7 @@ export type BrowserExecutionStatus = 'completed' | 'failed' | 'error';
 
 export interface ProviderCallbacks {
   onLiveUrl?: (liveUrl: string, recordingUrl?: string) => void | Promise<void>;
+  onTaskCreated?: (taskId: string, sessionId: string) => void | Promise<void>;
 }
 
 export interface ProviderCredentials {
@@ -20,6 +21,7 @@ export interface BrowserExecutionInput {
   settings: Partial<QASettings>;
   credentials?: ProviderCredentials;
   maxSteps?: number;
+  signal?: AbortSignal;
 }
 
 export interface BrowserExecutionVerdict {

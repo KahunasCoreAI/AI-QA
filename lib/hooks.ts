@@ -43,7 +43,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
 /**
  * Hook for managing test execution with SSE
  */
-export type ExecutionRunStatus = 'running' | 'completed' | 'cancelled' | 'error';
+export type ExecutionRunStatus = 'running' | 'completed' | 'cancelled' | 'error' | 'reconciling';
 
 interface ExecutionRunState {
   status: ExecutionRunStatus;
@@ -51,6 +51,7 @@ interface ExecutionRunState {
   error: string | null;
   startedAt: number;
   completedAt?: number;
+  isReconciling?: boolean;
 }
 
 interface ExecuteRunInput {
@@ -66,12 +67,14 @@ export function useTestExecution(
   onComplete?: (
     runId: string,
     finalResults: Map<string, TestResult>,
-    status: Exclude<ExecutionRunStatus, 'running'>
+    status: Exclude<ExecutionRunStatus, 'running' | 'reconciling'>
   ) => void
 ) {
   const [runStates, setRunStates] = useState<Map<string, ExecutionRunState>>(new Map());
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const resultsRef = useRef<Map<string, Map<string, TestResult>>>(new Map());
+  // Map<runId, Map<testCaseId, { taskId, sessionId }>>
+  const taskMapRef = useRef<Map<string, Map<string, { taskId: string; sessionId: string }>>>(new Map());
 
   const handleTestEvent = useCallback((runId: string, event: TestEvent) => {
     const { testCaseId, data } = event;
@@ -90,6 +93,15 @@ export function useTestExecution(
       };
 
       switch (event.type) {
+        case 'task_created':
+          // Store task ID mapping for reconciliation; no result state change needed
+          if (data?.taskId && data?.sessionId) {
+            const runTasks = taskMapRef.current.get(runId) ?? new Map();
+            runTasks.set(testCaseId, { taskId: data.taskId, sessionId: data.sessionId });
+            taskMapRef.current.set(runId, runTasks);
+          }
+          break;
+
         case 'test_start':
           updatedResults.set(testCaseId, {
             ...existing,
@@ -143,6 +155,129 @@ export function useTestExecution(
     });
   }, []);
 
+  const reconcileRun = useCallback(async (
+    runId: string,
+    testCaseIds: string[]
+  ): Promise<void> => {
+    const runTasks = taskMapRef.current.get(runId);
+    if (!runTasks || runTasks.size === 0) return;
+
+    // Find tests that have known task IDs but are still running
+    const currentResults = resultsRef.current.get(runId) ?? new Map();
+    const pendingTasks: Array<{ testCaseId: string; taskId: string; sessionId: string }> = [];
+
+    for (const testCaseId of testCaseIds) {
+      const result = currentResults.get(testCaseId);
+      const taskInfo = runTasks.get(testCaseId);
+      if (!taskInfo) continue;
+      if (result && result.status !== 'running' && result.status !== 'pending') continue;
+      pendingTasks.push({ testCaseId, taskId: taskInfo.taskId, sessionId: taskInfo.sessionId });
+    }
+
+    if (pendingTasks.length === 0) return;
+
+    // Mark run as reconciling
+    setRunStates((prev) => {
+      const run = prev.get(runId);
+      if (!run) return prev;
+      const next = new Map(prev);
+      next.set(runId, { ...run, status: 'reconciling', isReconciling: true });
+      return next;
+    });
+
+    const MAX_ATTEMPTS = 36;
+    const POLL_MS = 5000;
+    const remaining = new Set(pendingTasks.map((t) => t.testCaseId));
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS && remaining.size > 0; attempt++) {
+      const tasksToCheck = pendingTasks.filter((t) => remaining.has(t.testCaseId));
+
+      try {
+        const res = await fetch('/api/execute-tests/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tasks: tasksToCheck }),
+        });
+
+        if (res.ok) {
+          const { results } = (await res.json()) as {
+            results: Array<{
+              testCaseId: string;
+              taskId: string;
+              status: string;
+              result?: {
+                verdict: { success: boolean; reason: string; extractedData?: Record<string, unknown> } | null;
+                recordingUrl?: string;
+              };
+              error?: string;
+            }>;
+          };
+
+          for (const item of results) {
+            if (item.status === 'running') continue;
+
+            remaining.delete(item.testCaseId);
+
+            if (item.status === 'error' && item.error) {
+              handleTestEvent(runId, {
+                type: 'test_error',
+                testCaseId: item.testCaseId,
+                timestamp: Date.now(),
+                data: { error: item.error },
+              });
+              continue;
+            }
+
+            if (item.result?.verdict) {
+              const status = item.result.verdict.success ? 'passed' : 'failed';
+              handleTestEvent(runId, {
+                type: 'test_complete',
+                testCaseId: item.testCaseId,
+                timestamp: Date.now(),
+                data: {
+                  result: {
+                    id: `reconciled-${item.testCaseId}`,
+                    testCaseId: item.testCaseId,
+                    status,
+                    startedAt: Date.now(),
+                    completedAt: Date.now(),
+                    reason: item.result.verdict.reason,
+                    recordingUrl: item.result.recordingUrl,
+                    extractedData: item.result.verdict.extractedData,
+                  },
+                },
+              });
+            } else {
+              // Finished but no verdict
+              handleTestEvent(runId, {
+                type: 'test_error',
+                testCaseId: item.testCaseId,
+                timestamp: Date.now(),
+                data: { error: 'Task completed but no verdict was returned.' },
+              });
+            }
+          }
+        }
+      } catch {
+        // Network error during reconciliation — will retry on next attempt
+      }
+
+      if (remaining.size > 0) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+    }
+
+    // Mark any still-unresolved tests as error
+    for (const testCaseId of remaining) {
+      handleTestEvent(runId, {
+        type: 'test_error',
+        testCaseId,
+        timestamp: Date.now(),
+        data: { error: 'Connection lost and task status could not be resolved.' },
+      });
+    }
+  }, [handleTestEvent]);
+
   const executeRun = useCallback(async ({
     runId,
     testCases,
@@ -156,6 +291,7 @@ export function useTestExecution(
     const controller = new AbortController();
     abortControllersRef.current.set(runId, controller);
     resultsRef.current.set(runId, new Map());
+    taskMapRef.current.set(runId, new Map());
 
     setRunStates((prev) => {
       const next = new Map(prev);
@@ -168,14 +304,17 @@ export function useTestExecution(
       return next;
     });
 
-    let completionStatus: Exclude<ExecutionRunStatus, 'running'> = 'completed';
+    let completionStatus: Exclude<ExecutionRunStatus, 'running' | 'reconciling'> = 'completed';
     let errorMessage: string | null = null;
+    let receivedAllComplete = false;
+    const testCaseIds = testCases.map((tc) => tc.id);
 
     try {
       const response = await fetch('/api/execute-tests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          runId,
           testCases,
           websiteUrl,
           parallelLimit,
@@ -208,8 +347,11 @@ export function useTestExecution(
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
-            const event: TestEvent = JSON.parse(line.slice(6));
-            handleTestEvent(runId, event);
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'all_complete') {
+              receivedAllComplete = true;
+            }
+            handleTestEvent(runId, event as TestEvent);
           } catch (e) {
             console.error('Failed to parse SSE event:', e);
           }
@@ -225,6 +367,18 @@ export function useTestExecution(
     } finally {
       abortControllersRef.current.delete(runId);
 
+      // Reconciliation: if SSE ended without all_complete and wasn't cancelled, poll for results
+      if (!receivedAllComplete && completionStatus !== 'cancelled') {
+        try {
+          await reconcileRun(runId, testCaseIds);
+        } catch {
+          // Reconciliation failed — proceed with whatever results we have
+        }
+      }
+
+      // Clean up task map
+      taskMapRef.current.delete(runId);
+
       const finalResults = new Map(resultsRef.current.get(runId) ?? []);
       setRunStates((prev) => {
         const run = prev.get(runId);
@@ -233,6 +387,7 @@ export function useTestExecution(
         next.set(runId, {
           ...run,
           status: completionStatus,
+          isReconciling: false,
           error: errorMessage,
           completedAt: Date.now(),
         });
@@ -241,7 +396,7 @@ export function useTestExecution(
 
       onComplete?.(runId, finalResults, completionStatus);
     }
-  }, [handleTestEvent, onComplete]);
+  }, [handleTestEvent, onComplete, reconcileRun]);
 
   const cancelRun = useCallback((runId: string) => {
     const controller = abortControllersRef.current.get(runId);
@@ -259,6 +414,15 @@ export function useTestExecution(
     });
 
     controller.abort();
+
+    // Also call server-side stop endpoint to kill provider tasks
+    fetch('/api/execute-tests/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    }).catch(() => {
+      // Best effort — the SSE abort signal should also trigger cleanup
+    });
   }, []);
 
   const skipTest = useCallback((runId: string, testCaseId: string) => {
@@ -291,7 +455,7 @@ export function useTestExecution(
 
   const activeRunIds = useMemo(() => {
     return Array.from(runStates.entries())
-      .filter(([, run]) => run.status === 'running')
+      .filter(([, run]) => run.status === 'running' || run.status === 'reconciling')
       .map(([runId]) => runId);
   }, [runStates]);
 

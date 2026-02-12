@@ -388,16 +388,16 @@ export function UserAccountsManager({
                       </TableCell>
 
                       {hyperbrowserEnabled && (
-                        <TableCell className="py-2.5 align-top">
+                        <TableCell className="py-2.5 align-middle">
                           {renderProviderStateCell(account, 'hyperbrowser')}
                         </TableCell>
                       )}
 
-                      <TableCell className="py-2.5 align-top">
+                      <TableCell className="py-2.5 align-middle">
                         {renderProviderStateCell(account, 'browser-use-cloud')}
                       </TableCell>
 
-                      <TableCell className="py-2.5 align-top" onClick={(e) => e.stopPropagation()}>
+                      <TableCell className="py-2.5 align-middle" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-7 w-7">

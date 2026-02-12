@@ -7,8 +7,10 @@ import { enforceRateLimit } from '@/lib/security/rate-limit';
 import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
+import { registerRun, unregisterRun } from '@/lib/server/active-runs';
 
 interface ExecuteTestsRequest {
+  runId?: string;
   testCases: TestCase[];
   websiteUrl: string;
   parallelLimit?: number;
@@ -86,9 +88,23 @@ export async function POST(request: NextRequest) {
 
   // Start processing in the background
   (async () => {
+    let runId: string | undefined;
     try {
       const body: ExecuteTestsRequest = await request.json();
       const { testCases, websiteUrl, aiModel, settings: rawSettings } = body;
+      runId = body.runId;
+
+      // Register this run for server-side abort tracking
+      let runAbortController: AbortController | undefined;
+      if (runId) {
+        runAbortController = registerRun(runId);
+        // Forward client disconnect to the run abort controller
+        request.signal.addEventListener('abort', () => {
+          runAbortController?.abort();
+        }, { once: true });
+      }
+      const runSignal = runAbortController?.signal;
+
       const persistedState = await getOrCreateTeamState(activeTeam.teamId);
       const providerKeys = await getTeamProviderKeys(activeTeam.teamId);
       const settings = normalizeSettings({
@@ -243,7 +259,7 @@ export async function POST(request: NextRequest) {
 
             // Capture resolvedAccountId in closure for unlock
             const lockedId = resolvedAccountId;
-            executeTestCase(testCase, websiteUrl, aiModel, settings, sendEvent, credentials)
+            executeTestCase(testCase, websiteUrl, aiModel, settings, sendEvent, credentials, runSignal)
               .then((result) => {
                 results.push(result);
               })
@@ -327,6 +343,7 @@ export async function POST(request: NextRequest) {
         data: { error: error instanceof Error ? error.message : 'Unknown error' },
       });
     } finally {
+      if (runId) unregisterRun(runId);
       await closeWriter();
     }
   })();
@@ -374,7 +391,8 @@ async function executeTestCase(
   aiModel: string,
   settings: Partial<QASettings>,
   sendEvent?: (event: TestEvent) => Promise<void>,
-  credentials?: ExecutionCredentials
+  credentials?: ExecutionCredentials,
+  signal?: AbortSignal,
 ): Promise<TestResult> {
   const testCaseId = testCase.id;
   const startTime = Date.now();
@@ -397,6 +415,7 @@ async function executeTestCase(
         expectedOutcome: testCase.expectedOutcome,
         settings,
         credentials,
+        signal,
       },
       {
         onLiveUrl: async (liveUrl, recordingUrl) => {
@@ -408,6 +427,14 @@ async function executeTestCase(
               streamingUrl: liveUrl,
               ...(recordingUrl ? { recordingUrl } : {}),
             },
+          });
+        },
+        onTaskCreated: async (taskId, sessionId) => {
+          await sendEvent?.({
+            type: 'task_created',
+            testCaseId,
+            timestamp: Date.now(),
+            data: { taskId, sessionId },
           });
         },
       }

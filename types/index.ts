@@ -183,6 +183,7 @@ export interface BulkGenerateResponse {
 
 // SSE Event types
 export type TestEventType =
+  | 'task_created'
   | 'test_start'
   | 'streaming_url'
   | 'step_progress'
@@ -196,6 +197,8 @@ export interface TestEvent {
   testCaseId: string;
   timestamp: number;
   data?: {
+    taskId?: string;
+    sessionId?: string;
     streamingUrl?: string;
     recordingUrl?: string;
     currentStep?: number;

@@ -241,10 +241,23 @@ async function resolveOutputFileUrl(
   return undefined;
 }
 
-async function waitForTaskCompletion(apiKey: string, taskId: string): Promise<BrowserUseCloudTaskView> {
+async function waitForTaskCompletion(
+  apiKey: string,
+  taskId: string,
+  signal?: AbortSignal
+): Promise<BrowserUseCloudTaskView> {
   const started = Date.now();
 
   while (true) {
+    if (signal?.aborted) {
+      try {
+        await stopTaskAndSession(apiKey, taskId);
+      } catch {
+        // Best effort stop.
+      }
+      throw new DOMException('Task cancelled', 'AbortError');
+    }
+
     const task = await getTask(apiKey, taskId);
 
     if (task.status === 'finished' || task.status === 'stopped') {
@@ -260,7 +273,13 @@ async function waitForTaskCompletion(apiKey: string, taskId: string): Promise<Br
       throw new Error(`BrowserUse Cloud task ${taskId} timed out after ${Math.floor(POLL_TIMEOUT_MS / 1000)}s.`);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    // Wait for poll interval, but wake up early if abort signal fires
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, POLL_INTERVAL_MS);
+      if (signal && !signal.aborted) {
+        signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      }
+    });
   }
 }
 
@@ -310,7 +329,9 @@ export const browserUseCloudProvider: BrowserProvider = {
         structuredOutput: JSON.stringify(VERDICT_JSON_SCHEMA),
       });
 
-      const task = await waitForTaskCompletion(apiKey, createdTask.id);
+      await callbacks?.onTaskCreated?.(createdTask.id, session.id);
+
+      const task = await waitForTaskCompletion(apiKey, createdTask.id, input.signal);
       const verdict = parseVerdictFromOutput(task.output);
       let recordingUrl =
         session.publicShareUrl || (await createOrGetSessionShareUrl(apiKey, session.id)) || undefined;
@@ -459,3 +480,34 @@ export const browserUseCloudProvider: BrowserProvider = {
     await deleteProfileInternal(apiKey, profileId);
   },
 };
+
+export type TaskStatusResult = {
+  status: 'running' | 'finished' | 'stopped';
+  verdict: ReturnType<typeof parseVerdictFromOutput>;
+  recordingUrl?: string;
+};
+
+export async function checkTaskStatus(
+  apiKey: string,
+  taskId: string,
+  sessionId: string
+): Promise<TaskStatusResult> {
+  const task = await getTask(apiKey, taskId);
+
+  if (task.status === 'created' || task.status === 'started') {
+    return { status: 'running', verdict: null };
+  }
+
+  const verdict = parseVerdictFromOutput(task.output);
+
+  let recordingUrl = await createOrGetSessionShareUrl(apiKey, sessionId);
+  if (!recordingUrl) {
+    recordingUrl = await resolveOutputFileUrl(apiKey, taskId, task.outputFiles);
+  }
+
+  return {
+    status: task.status, // 'finished' | 'stopped'
+    verdict,
+    recordingUrl,
+  };
+}

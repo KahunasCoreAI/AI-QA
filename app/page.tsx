@@ -212,23 +212,10 @@ export default function DashboardPage() {
   }, [currentProject, state.activeTestRuns]);
 
   const executionRuns = useMemo(() => {
-    const ordered: typeof testRuns = [];
-    const seen = new Set<string>();
-
-    for (const run of activeRuns) {
-      ordered.push(run);
-      seen.add(run.id);
-    }
-
-    for (const run of testRuns) {
-      if (seen.has(run.id)) continue;
-      ordered.push(run);
-      seen.add(run.id);
-      if (ordered.length >= 10) break;
-    }
-
-    return ordered;
-  }, [activeRuns, testRuns]);
+    // Only show actively running tests — completed/cancelled/failed runs
+    // are available in the History tab.
+    return [...activeRuns];
+  }, [activeRuns]);
 
   const executionRunById = useMemo(() => {
     const byId = new Map<string, (typeof executionRuns)[number]>();
