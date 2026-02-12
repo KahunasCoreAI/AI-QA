@@ -1,10 +1,11 @@
 "use client";
 
+import { useState, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle2, XCircle, Loader2, Clock, ExternalLink, SkipForward, User } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Clock, ExternalLink, SkipForward, User, AlertCircle } from 'lucide-react';
 import type { TestCase, TestResult, UserAccount } from '@/types';
 import { cn, formatDuration } from '@/lib/utils';
 import { useElapsedTime } from '@/lib/hooks';
@@ -14,6 +15,69 @@ interface TestExecutionCardProps {
   result?: TestResult;
   onSkip?: () => void;
   userAccount?: UserAccount;
+}
+
+function IframeWithLoading({
+  previewUrl,
+  externalViewUrl
+}: {
+  previewUrl: string;
+  externalViewUrl?: string;
+}) {
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [iframeError, setIframeError] = useState(false);
+
+  const handleIframeLoad = useCallback(() => {
+    setIframeLoaded(true);
+    setIframeError(false);
+  }, []);
+
+  const handleIframeError = useCallback(() => {
+    setIframeLoaded(true);
+    setIframeError(true);
+  }, []);
+
+  if (iframeError) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="text-center space-y-2">
+          <AlertCircle className="h-6 w-6 text-[#f5a623] mx-auto" />
+          <p className="text-[10px] text-muted-foreground/60">Stream unavailable</p>
+          {externalViewUrl && (
+            <a
+              href={externalViewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-primary/70 hover:text-primary transition-colors underline"
+            >
+              Open in new tab
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <iframe
+        key={previewUrl}
+        src={previewUrl}
+        className="w-full h-full border-0"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        onLoad={handleIframeLoad}
+        onError={handleIframeError}
+      />
+      {!iframeLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
+          <div className="text-center space-y-2">
+            <Loader2 className="h-6 w-6 text-[#f5a623] animate-spin mx-auto" />
+            <p className="text-[10px] text-muted-foreground/60">Loading browser stream...</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
 
 function TestExecutionCard({ testCase, result, onSkip, userAccount }: TestExecutionCardProps) {
@@ -82,11 +146,7 @@ function TestExecutionCard({ testCase, result, onSkip, userAccount }: TestExecut
           )}
         >
           {previewUrl ? (
-            <iframe
-              src={previewUrl}
-              className="w-full h-full border-0"
-              sandbox="allow-scripts allow-same-origin"
-            />
+            <IframeWithLoading previewUrl={previewUrl} externalViewUrl={externalViewUrl} />
           ) : isRunning ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <Loader2 className="h-6 w-6 text-[#f5a623] animate-spin" />

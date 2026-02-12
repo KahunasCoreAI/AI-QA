@@ -897,16 +897,18 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {aiGenerationJobs.length > 0 && (
+            {/* Only show active AI exploration jobs (running/queued) in the Execution tab */}
+            {aiGenerationJobs.filter(job => job.status === 'running' || job.status === 'queued').length > 0 && (
               <div className="space-y-3">
                 <div>
                   <h3 className="text-sm font-semibold tracking-tight">AI Exploration</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Browser exploration sessions for test case generation
+                    Active browser exploration sessions
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {aiGenerationJobs
+                    .filter(job => job.status === 'running' || job.status === 'queued')
                     .slice(0, 9)
                     .map(job => (
                       <AiExplorationCard key={job.id} job={job} />
