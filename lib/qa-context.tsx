@@ -4,6 +4,9 @@ import React, { createContext, useContext, useReducer, useEffect, ReactNode, use
 import type {
   QAState,
   QAAction,
+  AiDraftNotification,
+  AiGenerationJob,
+  GeneratedTestDraft,
   Project,
   TestCase,
   TestGroup,
@@ -40,6 +43,9 @@ const initialState: QAState = {
   testRuns: {},
   testGroups: {},
   userAccounts: {},
+  aiGenerationJobs: {},
+  aiDrafts: {},
+  aiDraftNotifications: {},
   settings: defaultSettings,
   activeTestRuns: {},
   lastUpdated: null,
@@ -56,6 +62,12 @@ function reducer(state: QAState, action: QAAction): QAState {
         testRuns: { ...state.testRuns, [action.payload.id]: [] },
         testGroups: { ...state.testGroups, [action.payload.id]: [] },
         userAccounts: { ...state.userAccounts, [action.payload.id]: [] },
+        aiGenerationJobs: { ...state.aiGenerationJobs, [action.payload.id]: [] },
+        aiDrafts: { ...state.aiDrafts, [action.payload.id]: [] },
+        aiDraftNotifications: {
+          ...state.aiDraftNotifications,
+          [action.payload.id]: { hasUnseenDrafts: false },
+        },
         lastUpdated: Date.now(),
       };
 
@@ -73,10 +85,16 @@ function reducer(state: QAState, action: QAAction): QAState {
       const { [action.payload]: removedRuns, ...remainingRuns } = state.testRuns;
       const { [action.payload]: removedGroups, ...remainingGroups } = state.testGroups;
       const { [action.payload]: removedAccounts, ...remainingAccounts } = state.userAccounts;
+      const { [action.payload]: removedJobs, ...remainingJobs } = state.aiGenerationJobs;
+      const { [action.payload]: removedDrafts, ...remainingDrafts } = state.aiDrafts;
+      const { [action.payload]: removedDraftNotifications, ...remainingDraftNotifications } = state.aiDraftNotifications;
       void removedTests;
       void removedRuns;
       void removedGroups;
       void removedAccounts;
+      void removedJobs;
+      void removedDrafts;
+      void removedDraftNotifications;
       return {
         ...state,
         projects: state.projects.filter((p) => p.id !== action.payload),
@@ -84,6 +102,9 @@ function reducer(state: QAState, action: QAAction): QAState {
         testRuns: remainingRuns,
         testGroups: remainingGroups,
         userAccounts: remainingAccounts,
+        aiGenerationJobs: remainingJobs,
+        aiDrafts: remainingDrafts,
+        aiDraftNotifications: remainingDraftNotifications,
         currentProjectId: state.currentProjectId === action.payload ? null : state.currentProjectId,
         lastUpdated: Date.now(),
       };
@@ -246,6 +267,43 @@ function reducer(state: QAState, action: QAAction): QAState {
         testCases: {
           ...state.testCases,
           [projectId]: tests.map(tc => tc.userAccountId === id ? { ...tc, userAccountId: undefined } : tc),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'SYNC_AI_GENERATION_PROJECT_STATE': {
+      const { projectId, jobs, drafts, notification } = action.payload;
+      return {
+        ...state,
+        aiGenerationJobs: {
+          ...state.aiGenerationJobs,
+          [projectId]: jobs,
+        },
+        aiDrafts: {
+          ...state.aiDrafts,
+          [projectId]: drafts,
+        },
+        aiDraftNotifications: {
+          ...state.aiDraftNotifications,
+          [projectId]:
+            notification ??
+            state.aiDraftNotifications[projectId] ??
+            { hasUnseenDrafts: drafts.length > 0 },
+        },
+      };
+    }
+
+    case 'MARK_AI_DRAFTS_SEEN': {
+      const { projectId, seenAt } = action.payload;
+      return {
+        ...state,
+        aiDraftNotifications: {
+          ...state.aiDraftNotifications,
+          [projectId]: {
+            hasUnseenDrafts: false,
+            lastSeenAt: seenAt ?? Date.now(),
+          },
         },
         lastUpdated: Date.now(),
       };
@@ -676,6 +734,9 @@ function reducer(state: QAState, action: QAAction): QAState {
         activeTestRuns: mergedActiveRuns,
         testGroups: action.payload.testGroups || {},
         userAccounts: action.payload.userAccounts || {},
+        aiGenerationJobs: action.payload.aiGenerationJobs || {},
+        aiDrafts: action.payload.aiDrafts || {},
+        aiDraftNotifications: action.payload.aiDraftNotifications || {},
         isFirstLoad: false,
       };
     }
@@ -721,6 +782,17 @@ interface QAContextType {
   updateUserAccount: (id: string, projectId: string, updates: Partial<UserAccount>) => void;
   deleteUserAccount: (id: string, projectId: string) => void;
   getUserAccountsForProject: (projectId: string) => UserAccount[];
+  // AI generation actions
+  syncAiGenerationProjectState: (
+    projectId: string,
+    jobs: AiGenerationJob[],
+    drafts: GeneratedTestDraft[],
+    notification?: AiDraftNotification
+  ) => void;
+  markAiDraftsSeen: (projectId: string) => void;
+  getAiGenerationJobsForProject: (projectId: string) => AiGenerationJob[];
+  getAiDraftsForProject: (projectId: string) => GeneratedTestDraft[];
+  getAiDraftNotificationForProject: (projectId: string) => AiDraftNotification;
   // Test run actions
   startTestRun: (projectId: string, testCaseIds: string[], parallelLimit: number) => TestRun;
   updateTestResult: (runId: string, result: TestResult) => void;
@@ -962,6 +1034,35 @@ export function QAProvider({ children }: { children: ReactNode }) {
     return state.userAccounts[projectId] || [];
   }, [state.userAccounts]);
 
+  // AI generation actions
+  const syncAiGenerationProjectState = useCallback((
+    projectId: string,
+    jobs: AiGenerationJob[],
+    drafts: GeneratedTestDraft[],
+    notification?: AiDraftNotification
+  ) => {
+    dispatch({
+      type: 'SYNC_AI_GENERATION_PROJECT_STATE',
+      payload: { projectId, jobs, drafts, notification },
+    });
+  }, []);
+
+  const markAiDraftsSeen = useCallback((projectId: string) => {
+    dispatch({ type: 'MARK_AI_DRAFTS_SEEN', payload: { projectId } });
+  }, []);
+
+  const getAiGenerationJobsForProject = useCallback((projectId: string): AiGenerationJob[] => {
+    return state.aiGenerationJobs[projectId] || [];
+  }, [state.aiGenerationJobs]);
+
+  const getAiDraftsForProject = useCallback((projectId: string): GeneratedTestDraft[] => {
+    return state.aiDrafts[projectId] || [];
+  }, [state.aiDrafts]);
+
+  const getAiDraftNotificationForProject = useCallback((projectId: string): AiDraftNotification => {
+    return state.aiDraftNotifications[projectId] || { hasUnseenDrafts: false };
+  }, [state.aiDraftNotifications]);
+
   // Test run actions
   const startTestRun = useCallback((projectId: string, testCaseIds: string[], parallelLimit: number): TestRun => {
     const run: TestRun = {
@@ -1044,6 +1145,11 @@ export function QAProvider({ children }: { children: ReactNode }) {
     updateUserAccount,
     deleteUserAccount,
     getUserAccountsForProject,
+    syncAiGenerationProjectState,
+    markAiDraftsSeen,
+    getAiGenerationJobsForProject,
+    getAiDraftsForProject,
+    getAiDraftNotificationForProject,
     startTestRun,
     updateTestResult,
     completeTestRun,

@@ -130,6 +130,48 @@ export interface GeneratedTest {
   expectedOutcome: string;
 }
 
+export type AiGenerationJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type AiDraftStatus = 'draft' | 'published' | 'discarded' | 'duplicate_skipped';
+
+export interface AiGenerationJob {
+  id: string;
+  projectId: string;
+  prompt: string;
+  groupName?: string;
+  userAccountId?: string;
+  browserProvider: BrowserProvider;
+  settingsSnapshot?: Partial<QASettings>;
+  aiModel: string;
+  status: AiGenerationJobStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+  progressMessage?: string;
+  draftCount: number;
+  duplicateCount: number;
+}
+
+export interface GeneratedTestDraft extends GeneratedTest {
+  id: string;
+  projectId: string;
+  jobId: string;
+  userAccountId?: string;
+  groupName?: string;
+  status: AiDraftStatus;
+  duplicateOfTestCaseId?: string;
+  duplicateReason?: string;
+  createdAt: number;
+  publishedAt?: number;
+  discardedAt?: number;
+}
+
+export interface AiDraftNotification {
+  hasUnseenDrafts: boolean;
+  lastSeenAt?: number;
+}
+
 export interface BulkGenerateRequest {
   rawText: string;
   websiteUrl: string;
@@ -197,6 +239,9 @@ export interface QAState {
   testRuns: Record<string, TestRun[]>; // keyed by projectId
   testGroups: Record<string, TestGroup[]>; // keyed by projectId
   userAccounts: Record<string, UserAccount[]>; // keyed by projectId
+  aiGenerationJobs: Record<string, AiGenerationJob[]>; // keyed by projectId
+  aiDrafts: Record<string, GeneratedTestDraft[]>; // keyed by projectId
+  aiDraftNotifications: Record<string, AiDraftNotification>; // keyed by projectId
   settings: QASettings;
   activeTestRuns: Record<string, TestRun>;
   lastUpdated: number | null;
@@ -219,6 +264,16 @@ export type QAAction =
   | { type: 'CREATE_USER_ACCOUNT'; payload: UserAccount }
   | { type: 'UPDATE_USER_ACCOUNT'; payload: { id: string; projectId: string; updates: Partial<UserAccount> } }
   | { type: 'DELETE_USER_ACCOUNT'; payload: { id: string; projectId: string } }
+  | {
+      type: 'SYNC_AI_GENERATION_PROJECT_STATE';
+      payload: {
+        projectId: string;
+        jobs: AiGenerationJob[];
+        drafts: GeneratedTestDraft[];
+        notification?: AiDraftNotification;
+      };
+    }
+  | { type: 'MARK_AI_DRAFTS_SEEN'; payload: { projectId: string; seenAt?: number } }
   | { type: 'START_TEST_RUN'; payload: TestRun }
   | { type: 'UPDATE_TEST_RESULT'; payload: { runId: string; result: TestResult } }
   | { type: 'COMPLETE_TEST_RUN'; payload: { runId: string; status: 'completed' | 'failed' | 'cancelled'; finalResults?: TestResult[] } }

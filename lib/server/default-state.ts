@@ -28,6 +28,9 @@ export function buildDefaultState(): QAState {
     testRuns: {},
     testGroups: {},
     userAccounts: {},
+    aiGenerationJobs: {},
+    aiDrafts: {},
+    aiDraftNotifications: {},
     settings: buildDefaultSettings(),
     activeTestRuns: {},
     lastUpdated: null,
@@ -65,6 +68,15 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
     testRuns: raw.testRuns && typeof raw.testRuns === 'object' ? raw.testRuns : base.testRuns,
     testGroups: raw.testGroups && typeof raw.testGroups === 'object' ? raw.testGroups : base.testGroups,
     userAccounts: raw.userAccounts && typeof raw.userAccounts === 'object' ? raw.userAccounts : base.userAccounts,
+    aiGenerationJobs:
+      raw.aiGenerationJobs && typeof raw.aiGenerationJobs === 'object'
+        ? raw.aiGenerationJobs
+        : base.aiGenerationJobs,
+    aiDrafts: raw.aiDrafts && typeof raw.aiDrafts === 'object' ? raw.aiDrafts : base.aiDrafts,
+    aiDraftNotifications:
+      raw.aiDraftNotifications && typeof raw.aiDraftNotifications === 'object'
+        ? raw.aiDraftNotifications
+        : base.aiDraftNotifications,
     settings,
     activeTestRuns: (() => {
       const candidate = raw as Record<string, unknown>;

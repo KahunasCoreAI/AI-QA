@@ -7,10 +7,11 @@ Write what you want to test in natural language, and the app spins up real brows
 ## What It Does
 
 1. **Create projects** — Point the dashboard at any website URL.
-2. **Write tests in plain English** — Describe what to test ("log in with valid credentials and verify the dashboard loads") or paste requirements / user stories and let AI generate a full suite.
+2. **Write tests in plain English** — Describe what to test ("log in with valid credentials and verify the dashboard loads") or use AI exploration to auto-discover coverage and generate draft tests.
 3. **Execute in real browsers** — Tests run in parallel via pluggable providers (Hyperbrowser Browser-Use, Hyperbrowser HyperAgent, or BrowserUse Cloud), each in its own browser session with optional proxy support.
-4. **Get results with AI analysis** — Every pass/fail comes with a bullet-point summary explaining what happened and why.
-5. **Generate bug reports** — One click turns a failed test into a structured bug report with severity, reproduction steps, and expected vs. actual behaviour.
+4. **Review AI drafts before publish** — Generated tests are returned as draft checklists with duplicate detection so you can publish only what you want.
+5. **Get results with AI analysis** — Every pass/fail comes with a bullet-point summary explaining what happened and why.
+6. **Generate bug reports** — One click turns a failed test into a structured bug report with severity, reproduction steps, and expected vs. actual behaviour.
 
 ## Tech Stack
 
@@ -38,7 +39,9 @@ app/
 │   ├── settings/provider-keys/   # Team-level encrypted provider key management
 │   ├── execute-tests/route.ts    # SSE endpoint — runs tests via selected provider, streams results
 │   ├── auth-session/route.ts     # Profile login/delete API for account sessions
-│   ├── generate-tests/route.ts   # Bulk AI test generation from raw text / user stories
+│   ├── generate-tests/route.ts   # Queue and poll async AI exploration jobs
+│   ├── generate-tests/publish/   # Publish selected draft tests into project test cases
+│   ├── generate-tests/discard/   # Discard selected draft tests
 │   ├── generate-report/route.ts  # AI bug report generation for failed tests
 │   └── parse-test/route.ts       # Parse plain-English test → structured steps
 ├── proxy.ts                      # Auth protection + domain gate
@@ -63,6 +66,15 @@ types/index.ts                    # All TypeScript interfaces and Zod schemas
 3. For each test, the selected provider from Settings creates a browser session, executes the natural-language task, and emits normalized pass/fail/error verdicts.
 4. After execution, an AI model generates a human-readable summary of each result.
 5. The client updates the live execution grid in real time and synchronizes team state to the database via `/api/state`.
+
+### How AI Exploration Works
+
+1. The client calls `POST /api/generate-tests` with prompt text, project/group context, account selection, and settings.
+2. The API returns immediately (`202 Accepted`) with `AI is exploring your app to determine test cases.`
+3. A queued background job launches a real browser agent via the selected provider and explores the requested flow.
+4. Exploration findings are synthesized into draft tests and deduped against existing project coverage.
+5. The client polls `GET /api/generate-tests?projectId=...` for job status and draft availability.
+6. Drafts are reviewed in **Test Cases → Drafts**, then published via `POST /api/generate-tests/publish` or discarded via `POST /api/generate-tests/discard`.
 
 ### Team Access Model
 
@@ -225,6 +237,7 @@ npm run dev
 - Use separate Neon branches/databases for staging vs production.
 
 For a full deploy checklist, see `docs/DEPLOYMENT.md`.
+For release notes, see `docs/CHANGELOG.md`.
 
 ## Usage
 
@@ -238,12 +251,21 @@ For a full deploy checklist, see `docs/DEPLOYMENT.md`.
 ### AI Test Generation
 
 1. Open a project and click **New Test** → **AI-Generated Tests**.
-2. Paste feature requirements, user stories, or any descriptive text.
-3. Review the generated tests, deselect any you don't need, and add them to the project.
+2. Enter your request (example: `as a coach I can create nutrition plans, please determine what tests are needed`).
+3. Optionally choose:
+   - `Group` (e.g. `nutrition`) to organize published tests
+   - `Account` (`none`, `any`, or a specific project account) for authenticated exploration
+4. Click **Generate Test Cases**. The request is fire-and-forget and returns immediately.
+5. Monitor status in **Execution** under **AI Exploration Jobs**.
+6. Open **Test Cases** and switch filter to **Drafts**.
+7. Review duplicate flags, select drafts, then:
+   - **Publish Selected** (creates test cases, applies optional group)
+   - **Discard** (removes drafts)
 
 ### Execution & Results
 
 - Tests execute in parallel (configurable in Settings, default: 3).
+- AI exploration jobs also appear in the **Execution** tab with queued/running/completed/failed state.
 - Each running test shows a live browser stream URL (ephemeral while the session is active).
 - After completion, links switch to a persistent recording/session URL when the provider exposes one.
 - Results include pass/fail status, duration, AI-generated explanation, and extracted data.
@@ -275,7 +297,10 @@ For a full deploy checklist, see `docs/DEPLOYMENT.md`.
 | `/api/settings/provider-keys` | GET / PUT | Read/update team-level encrypted provider keys |
 | `/api/execute-tests` | POST | Execute tests via SSE stream |
 | `/api/auth-session` | POST / DELETE | Create/login/delete provider browser profiles for account sessions |
-| `/api/generate-tests` | POST | AI-generate test cases from raw text |
+| `/api/generate-tests` | POST | Queue async AI exploration job (fire-and-forget) |
+| `/api/generate-tests` | GET | Poll AI exploration status + draft tests by `projectId` |
+| `/api/generate-tests/publish` | POST | Publish selected draft tests into real project test cases |
+| `/api/generate-tests/discard` | POST | Discard selected draft tests |
 | `/api/generate-report` | POST | Generate a bug report from a failed test |
 | `/api/parse-test` | POST | Parse plain-English description into structured steps |
 

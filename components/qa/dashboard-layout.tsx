@@ -42,6 +42,7 @@ interface DashboardLayoutProps {
   onCreateProject: () => void;
   onEditProject: (project: Project) => void;
   onDeleteProject: (id: string) => void;
+  hasUnseenDrafts?: boolean;
 }
 
 const navItems = [
@@ -67,6 +68,7 @@ export function DashboardLayout({
   onCreateProject,
   onEditProject,
   onDeleteProject,
+  hasUnseenDrafts = false,
 }: DashboardLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -196,7 +198,7 @@ export function DashboardLayout({
               <button
                 key={item.id}
                 className={cn(
-                  'flex w-full items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-100 mb-0.5',
+                  'relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-100 mb-0.5',
                   collapsed && 'justify-center px-0',
                   isActive
                     ? 'bg-accent text-foreground'
@@ -205,7 +207,17 @@ export function DashboardLayout({
                 onClick={() => onTabChange(item.id)}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
-                {!collapsed && <span>{item.label}</span>}
+                {!collapsed && (
+                  <span className="relative flex items-center">
+                    {item.label}
+                    {item.id === 'tests' && hasUnseenDrafts && (
+                      <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-red-500" />
+                    )}
+                  </span>
+                )}
+                {collapsed && item.id === 'tests' && hasUnseenDrafts && (
+                  <span className="absolute ml-4 -mt-4 inline-block h-2 w-2 rounded-full bg-red-500" />
+                )}
               </button>
             );
           })}

@@ -41,11 +41,13 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type {
+  AiGenerationJob,
+  GeneratedTestDraft,
+  QAState,
   Project,
   TestCase,
   TestRun,
   TestGroup,
-  GeneratedTest,
   BrowserProvider,
   UserAccount,
   AccountProfileProviderKey,
@@ -75,13 +77,13 @@ function resolveProviderForColumn(
 export default function DashboardPage() {
   const {
     state,
+    dispatch,
     currentViewer,
     createProject,
     updateProject,
     deleteProject,
     setCurrentProject,
     createTestCase,
-    createTestCasesBulk,
     updateTestCase,
     deleteTestCase,
     createTestGroup,
@@ -98,6 +100,11 @@ export default function DashboardPage() {
     deleteTestResult,
     clearTestRuns,
     updateSettings,
+    syncAiGenerationProjectState,
+    markAiDraftsSeen,
+    getAiGenerationJobsForProject,
+    getAiDraftsForProject,
+    getAiDraftNotificationForProject,
     getCurrentProject,
     getTestCasesForProject,
     getTestRunsForProject,
@@ -117,6 +124,7 @@ export default function DashboardPage() {
   const [viewingTestCase, setViewingTestCase] = useState<TestCase | null>(null);
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
   const [executionViewRunId, setExecutionViewRunId] = useState<string | null>(null);
+  const [isPublishingDrafts, setIsPublishingDrafts] = useState(false);
 
   const currentProject = getCurrentProject();
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
@@ -137,6 +145,25 @@ export default function DashboardPage() {
   const userAccounts = useMemo(
     () => currentProject ? getUserAccountsForProject(currentProject.id) : [],
     [currentProject, getUserAccountsForProject]
+  );
+  const aiGenerationJobs = useMemo(
+    () => currentProject ? getAiGenerationJobsForProject(currentProject.id) : [],
+    [currentProject, getAiGenerationJobsForProject]
+  );
+  const aiDrafts = useMemo(
+    () => currentProject ? getAiDraftsForProject(currentProject.id) : [],
+    [currentProject, getAiDraftsForProject]
+  );
+  const aiDraftNotification = useMemo(
+    () => currentProject ? getAiDraftNotificationForProject(currentProject.id) : { hasUnseenDrafts: false },
+    [currentProject, getAiDraftNotificationForProject]
+  );
+  const activeAiJob = useMemo(
+    () =>
+      aiGenerationJobs.find((job) => job.status === 'running' || job.status === 'queued') ||
+      aiGenerationJobs[0] ||
+      null,
+    [aiGenerationJobs]
   );
 
   // Track synced results to avoid infinite loops
@@ -217,6 +244,122 @@ export default function DashboardPage() {
     return executionRuns[0].id;
   }, [executionRunById, executionRuns, executionViewRunId]);
 
+  const refreshAiGenerationState = useCallback(async () => {
+    if (!currentProject) return;
+
+    try {
+      const response = await fetch(`/api/generate-tests?projectId=${encodeURIComponent(currentProject.id)}`, {
+        method: 'GET',
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+
+      syncAiGenerationProjectState(
+        currentProject.id,
+        (payload?.jobs || []) as AiGenerationJob[],
+        (payload?.drafts || []) as GeneratedTestDraft[],
+        payload?.notification
+      );
+    } catch (error) {
+      console.error('Failed to refresh AI generation status:', error);
+    }
+  }, [currentProject, syncAiGenerationProjectState]);
+
+  useEffect(() => {
+    if (!currentProject) return;
+
+    const shouldPoll =
+      testCreationMode === 'ai' ||
+      activeTab === 'execution' ||
+      aiGenerationJobs.some((job) => job.status === 'queued' || job.status === 'running');
+
+    if (!shouldPoll) return;
+
+    void refreshAiGenerationState();
+    const interval = setInterval(() => {
+      void refreshAiGenerationState();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [activeTab, aiGenerationJobs, currentProject, refreshAiGenerationState, testCreationMode]);
+
+  const handleAiJobQueued = useCallback(() => {
+    void refreshAiGenerationState();
+  }, [refreshAiGenerationState]);
+
+  const handlePublishDrafts = useCallback(async (draftIds: string[], groupName?: string) => {
+    if (!currentProject || draftIds.length === 0) return;
+    setIsPublishingDrafts(true);
+
+    try {
+      const response = await fetch('/api/generate-tests/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: currentProject.id,
+          draftIds,
+          groupName,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.error || 'Failed to publish drafts.');
+      }
+
+      syncAiGenerationProjectState(
+        currentProject.id,
+        (result?.jobs || []) as AiGenerationJob[],
+        (result?.drafts || []) as GeneratedTestDraft[],
+        result?.notification
+      );
+
+      if (result?.state) {
+        dispatch({ type: 'LOAD_STATE', payload: result.state as QAState });
+      } else {
+        void refreshAiGenerationState();
+      }
+    } catch (error) {
+      console.error('Failed to publish draft tests:', error);
+    } finally {
+      setIsPublishingDrafts(false);
+    }
+  }, [currentProject, dispatch, refreshAiGenerationState, syncAiGenerationProjectState]);
+
+  const handleDiscardDrafts = useCallback(async (draftIds: string[]) => {
+    if (!currentProject || draftIds.length === 0) return;
+    setIsPublishingDrafts(true);
+    try {
+      const response = await fetch('/api/generate-tests/discard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: currentProject.id,
+          draftIds,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.error || 'Failed to discard drafts.');
+      }
+
+      if (result?.state) {
+        dispatch({ type: 'LOAD_STATE', payload: result.state as QAState });
+      } else {
+        void refreshAiGenerationState();
+      }
+    } catch (error) {
+      console.error('Failed to discard draft tests:', error);
+    } finally {
+      setIsPublishingDrafts(false);
+    }
+  }, [currentProject, dispatch, refreshAiGenerationState]);
+
+  const handleDraftsViewed = useCallback(() => {
+    if (!currentProject) return;
+    if (!aiDraftNotification.hasUnseenDrafts) return;
+    markAiDraftsSeen(currentProject.id);
+  }, [aiDraftNotification.hasUnseenDrafts, currentProject, markAiDraftsSeen]);
+
   // Handle tab changes
   const handleTabChange = useCallback((tab: TabType) => {
     setActiveTab(tab);
@@ -289,12 +432,6 @@ export default function DashboardPage() {
     setEditingTestCase(testCase);
     setTestCreationMode('manual');
   }, []);
-
-  const handleAddGeneratedTests = useCallback((tests: GeneratedTest[]) => {
-    if (!currentProject) return;
-    createTestCasesBulk(currentProject.id, tests);
-    setTestCreationMode(null);
-  }, [currentProject, createTestCasesBulk]);
 
   const handleDeleteTestCase = useCallback((testCase: TestCase) => {
     setTestCaseToDelete({ id: testCase.id, projectId: testCase.projectId });
@@ -650,9 +787,13 @@ export default function DashboardPage() {
               </div>
 
               <AITestGenerator
+                projectId={currentProject.id}
                 websiteUrl={currentProject.websiteUrl}
                 aiModel={state.settings.aiModel}
-                onAddTests={handleAddGeneratedTests}
+                settings={state.settings}
+                userAccounts={userAccounts}
+                activeJob={activeAiJob}
+                onJobQueued={handleAiJobQueued}
               />
             </div>
           );
@@ -676,6 +817,7 @@ export default function DashboardPage() {
 
             <TestCaseList
               testCases={testCases}
+              drafts={aiDrafts}
               selectedIds={selectedTestIds}
               onSelectionChange={setSelectedTestIds}
               onSelect={handleViewTestCase}
@@ -687,6 +829,10 @@ export default function DashboardPage() {
               parallelLimit={state.settings.parallelLimit}
               onSaveAsGroupClick={() => setCreateGroupDialogOpen(true)}
               onRemoveFromGroup={handleRemoveFromGroup}
+              onPublishDrafts={handlePublishDrafts}
+              onDiscardDrafts={handleDiscardDrafts}
+              onDraftsViewed={handleDraftsViewed}
+              isPublishingDrafts={isPublishingDrafts}
               userAccounts={userAccounts}
               fallbackCreatorName={currentUserFirstName}
             />
@@ -767,6 +913,39 @@ export default function DashboardPage() {
                 ) : null}
               </div>
             </div>
+
+            {aiGenerationJobs.length > 0 && (
+              <Card className="border-border/40">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold tracking-tight">AI Exploration Jobs</CardTitle>
+                  <CardDescription className="text-xs">
+                    Fire-and-forget generation status for draft test case exploration.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {aiGenerationJobs.slice(0, 8).map((job) => {
+                    const isRunning = job.status === 'queued' || job.status === 'running';
+                    return (
+                      <div
+                        key={job.id}
+                        className="flex items-center justify-between rounded-md border border-border/40 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium truncate">{job.prompt}</p>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {job.progressMessage || (job.status === 'failed' ? job.error : '') || 'Awaiting updates'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
+                          <span className="text-[11px] capitalize text-muted-foreground">{job.status}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
 
             {executionRuns.length > 0 && (
               <div className="flex flex-wrap gap-2">
@@ -935,6 +1114,7 @@ export default function DashboardPage() {
         }}
         onEditProject={handleEditProject}
         onDeleteProject={handleDeleteProject}
+        hasUnseenDrafts={Boolean(currentProject && aiDraftNotification.hasUnseenDrafts)}
       >
         {renderContent()}
       </DashboardLayout>

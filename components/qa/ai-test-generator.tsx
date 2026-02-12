@@ -1,115 +1,100 @@
 "use client";
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Sparkles, Plus, Trash2, CheckCircle2 } from 'lucide-react';
-import type { GeneratedTest } from '@/types';
-import { cn } from '@/lib/utils';
+import { Loader2, Sparkles, CheckCircle2, AlertCircle, Activity } from 'lucide-react';
+import type { AiGenerationJob, QASettings, UserAccount } from '@/types';
 
 interface AITestGeneratorProps {
+  projectId: string;
   websiteUrl: string;
   aiModel: string;
-  onAddTests: (tests: GeneratedTest[]) => void;
+  settings: QASettings;
+  userAccounts: UserAccount[];
+  activeJob: AiGenerationJob | null;
+  onJobQueued: () => void;
 }
 
-export function AITestGenerator({ websiteUrl, aiModel, onAddTests }: AITestGeneratorProps) {
+export function AITestGenerator({
+  projectId,
+  websiteUrl,
+  aiModel,
+  settings,
+  userAccounts,
+  activeJob,
+  onJobQueued,
+}: AITestGeneratorProps) {
   const [rawText, setRawText] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedTests, setGeneratedTests] = useState<GeneratedTest[]>([]);
-  const [selectedTests, setSelectedTests] = useState<Set<number>>(new Set());
+  const [groupName, setGroupName] = useState('');
+  const [userAccountId, setUserAccountId] = useState<string>('none');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const activeStatus = useMemo(() => {
+    if (!activeJob) return null;
+    if (activeJob.status === 'queued' || activeJob.status === 'running') {
+      return activeJob.progressMessage || 'AI is exploring your app to determine test cases.';
+    }
+    if (activeJob.status === 'completed') {
+      return `Exploration finished. ${activeJob.draftCount} draft test case${activeJob.draftCount === 1 ? '' : 's'} ready.`;
+    }
+    if (activeJob.status === 'failed') {
+      return activeJob.error || 'AI exploration failed.';
+    }
+    return null;
+  }, [activeJob]);
 
   const handleGenerate = async () => {
     if (!rawText.trim()) return;
 
-    setIsGenerating(true);
+    setIsSubmitting(true);
     setError(null);
-    setGeneratedTests([]);
-    setSelectedTests(new Set());
+    setSuccessMessage(null);
 
     try {
       const response = await fetch('/api/generate-tests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rawText,
+          projectId,
+          rawText: rawText.trim(),
           websiteUrl,
           aiModel,
+          groupName: groupName.trim() || undefined,
+          userAccountId,
+          settings,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to generate tests');
-      }
-
       const data = await response.json();
-
-      if (data.tests && data.tests.length > 0) {
-        setGeneratedTests(data.tests);
-        // Select all by default
-        setSelectedTests(new Set(data.tests.map((_: GeneratedTest, i: number) => i)));
-      } else {
-        setError('No tests were generated. Try providing more details.');
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to queue AI exploration.');
       }
+
+      setSuccessMessage(data?.message || 'AI is exploring your app to determine test cases.');
+      onJobQueued();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate tests');
+      setError(err instanceof Error ? err.message : 'Failed to queue AI exploration.');
     } finally {
-      setIsGenerating(false);
+      setIsSubmitting(false);
     }
-  };
-
-  const toggleTest = (index: number) => {
-    const newSelected = new Set(selectedTests);
-    if (newSelected.has(index)) {
-      newSelected.delete(index);
-    } else {
-      newSelected.add(index);
-    }
-    setSelectedTests(newSelected);
-  };
-
-  const selectAll = () => {
-    setSelectedTests(new Set(generatedTests.map((_, i) => i)));
-  };
-
-  const selectNone = () => {
-    setSelectedTests(new Set());
-  };
-
-  const handleAddSelected = () => {
-    const testsToAdd = generatedTests.filter((_, i) => selectedTests.has(i));
-    if (testsToAdd.length > 0) {
-      onAddTests(testsToAdd);
-      // Reset state
-      setGeneratedTests([]);
-      setSelectedTests(new Set());
-      setRawText('');
-    }
-  };
-
-  const removeTest = (index: number) => {
-    setGeneratedTests((prev) => prev.filter((_, i) => i !== index));
-    const newSelected = new Set(selectedTests);
-    newSelected.delete(index);
-    // Adjust indices for items after the removed one
-    const adjusted = new Set<number>();
-    newSelected.forEach((i) => {
-      if (i > index) {
-        adjusted.add(i - 1);
-      } else {
-        adjusted.add(i);
-      }
-    });
-    setSelectedTests(adjusted);
   };
 
   return (
     <div className="space-y-4">
-      {/* Input Section */}
       <Card className="border-border/40">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-tight">
@@ -117,30 +102,67 @@ export function AITestGenerator({ websiteUrl, aiModel, onAddTests }: AITestGener
             AI Test Generator
           </CardTitle>
           <CardDescription className="text-xs">
-            Paste your requirements, user stories, feature descriptions, or any text.
-            AI will analyze it and generate test cases automatically.
+            Describe a flow and AI will log in, explore the product, and generate draft test cases for review.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <Textarea
-            placeholder={`Paste your text here. Examples:\n\n• Feature requirements or user stories\n• Bug descriptions to create regression tests\n• Workflow descriptions\n• API documentation\n• Or just describe what you want to test...`}
-            value={rawText}
-            onChange={(e) => setRawText(e.target.value)}
-            rows={8}
-            className="resize-none font-mono text-xs leading-relaxed"
-          />
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="ai-input" className="text-xs font-medium">Exploration Request</Label>
+            <Textarea
+              id="ai-input"
+              placeholder={`Example: As a coach I can create nutrition plans. Explore this flow and determine all tests needed.`}
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              rows={8}
+              className="resize-none font-mono text-xs leading-relaxed"
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="group-name" className="text-xs font-medium">Group (optional)</Label>
+              <Input
+                id="group-name"
+                value={groupName}
+                onChange={(event) => setGroupName(event.target.value)}
+                placeholder="e.g. nutrition"
+                className="h-8 text-sm"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Uses existing group if it matches, otherwise creates it on publish.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="user-account" className="text-xs font-medium">Account</Label>
+              <Select value={userAccountId} onValueChange={setUserAccountId}>
+                <SelectTrigger className="h-8 text-sm w-full">
+                  <SelectValue placeholder="No account (unauthenticated)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No account (unauthenticated)</SelectItem>
+                  <SelectItem value="__any__">Any available account</SelectItem>
+                  {userAccounts.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.label} ({account.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
           <div className="flex items-center gap-3">
             <Button
               onClick={handleGenerate}
-              disabled={!rawText.trim() || isGenerating}
+              disabled={!rawText.trim() || isSubmitting}
               size="sm"
               className="h-8 text-xs"
             >
-              {isGenerating ? (
+              {isSubmitting ? (
                 <>
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  Generating...
+                  Queuing...
                 </>
               ) : (
                 <>
@@ -150,109 +172,41 @@ export function AITestGenerator({ websiteUrl, aiModel, onAddTests }: AITestGener
               )}
             </Button>
 
+            {successMessage && (
+              <span className="inline-flex items-center text-xs text-[#30a46c]">
+                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                {successMessage}
+              </span>
+            )}
+
             {error && (
-              <span className="text-xs text-[#e5484d]">{error}</span>
+              <span className="inline-flex items-center text-xs text-[#e5484d]">
+                <AlertCircle className="mr-1 h-3.5 w-3.5" />
+                {error}
+              </span>
             )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Generated Tests Section */}
-      {generatedTests.length > 0 && (
+      {activeJob && activeStatus && (
         <Card className="border-border/40">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-semibold tracking-tight">Generated Test Cases</CardTitle>
-                <CardDescription className="text-xs">
-                  Review and select the tests you want to add.
-                </CardDescription>
-              </div>
-              <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">
-                {selectedTests.size} of {generatedTests.length} selected
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Selection controls */}
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={selectAll}>
-                Select All
-              </Button>
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={selectNone}>
-                Select None
-              </Button>
-            </div>
-
-            {/* Test list */}
-            <div className="space-y-1.5">
-              {generatedTests.map((test, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    'p-3 rounded-md border transition-colors duration-100',
-                    selectedTests.has(index)
-                      ? 'bg-primary/5 border-primary/20'
-                      : 'bg-transparent border-border/40'
-                  )}
-                >
-                  <div className="flex items-start gap-2.5">
-                    <Checkbox
-                      checked={selectedTests.has(index)}
-                      onCheckedChange={() => toggleTest(index)}
-                      className="mt-0.5"
-                    />
-
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <span className="text-sm font-medium">{test.title}</span>
-
-                      <p className="text-xs text-muted-foreground">
-                        {test.description}
-                      </p>
-
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <span className="text-muted-foreground/60">Expected:</span>
-                        <span className="text-[#30a46c]/80">{test.expectedOutcome}</span>
-                      </div>
-                    </div>
-
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-[#e5484d]"
-                      onClick={() => removeTest(index)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+          <CardContent className="py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Exploration Job</span>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                    {activeJob.status}
+                  </Badge>
                 </div>
-              ))}
+                <p className="text-xs text-muted-foreground">{activeStatus}</p>
+              </div>
+              {(activeJob.status === 'queued' || activeJob.status === 'running') && (
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              )}
             </div>
-
-            {/* Add button */}
-            <div className="flex justify-end pt-3 border-t border-border/30">
-              <Button
-                onClick={handleAddSelected}
-                disabled={selectedTests.size === 0}
-                size="sm"
-                className="h-8 text-xs"
-              >
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add {selectedTests.size} Test{selectedTests.size !== 1 ? 's' : ''} to Project
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Success state placeholder for when tests are added */}
-      {generatedTests.length === 0 && rawText === '' && (
-        <Card className="border-dashed border-border/30">
-          <CardContent className="py-10 text-center">
-            <CheckCircle2 className="mx-auto h-8 w-8 text-muted-foreground/20 mb-3" />
-            <p className="text-xs text-muted-foreground">
-              Paste your requirements above to generate test cases
-            </p>
           </CardContent>
         </Card>
       )}
