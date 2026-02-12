@@ -52,6 +52,137 @@ const initialState: QAState = {
   isFirstLoad: true,
 };
 
+/**
+ * Clean up stale "running" state left behind by interrupted sessions.
+ * Runs once when state is loaded from the server.
+ */
+function cleanStaleRunningState(incoming: QAState): QAState {
+  let mutated = false;
+
+  // 1. Clear all activeTestRuns — they're from dead server sessions
+  const hadActiveRuns = Object.keys(incoming.activeTestRuns || {}).length > 0;
+
+  // 2. Fix testRuns with stuck running status or running results
+  const fixedTestRuns = { ...incoming.testRuns };
+  for (const projectId of Object.keys(fixedTestRuns)) {
+    const runs = fixedTestRuns[projectId];
+    if (!runs) continue;
+
+    const updatedRuns = runs.map((run) => {
+      if (run.status !== 'running') {
+        // Even completed runs can have individual results stuck at running
+        const hasStaleResults = run.results.some(
+          (r) => r.status === 'running' || r.status === 'pending'
+        );
+        if (!hasStaleResults) return run;
+      }
+
+      mutated = true;
+      const fixedResults = run.results.map((r) => {
+        if (r.status === 'running' || r.status === 'pending') {
+          return {
+            ...r,
+            status: 'error' as const,
+            error: 'Connection lost before result was received.',
+            completedAt: r.completedAt || run.startedAt,
+          };
+        }
+        return r;
+      });
+
+      const passed = fixedResults.filter((r) => r.status === 'passed').length;
+      const failed = fixedResults.filter((r) => r.status === 'failed' || r.status === 'error').length;
+      const skipped = fixedResults.filter((r) => r.status === 'skipped').length;
+
+      return {
+        ...run,
+        status: 'failed' as const,
+        completedAt: run.completedAt || Date.now(),
+        results: fixedResults,
+        passed,
+        failed,
+        skipped,
+      };
+    });
+
+    fixedTestRuns[projectId] = updatedRuns;
+  }
+
+  // 3. Fix test cases with stale running status
+  const fixedTestCases = { ...incoming.testCases };
+  for (const projectId of Object.keys(fixedTestCases)) {
+    const cases = fixedTestCases[projectId];
+    if (!cases) continue;
+
+    const updated = cases.map((tc) => {
+      if (tc.status !== 'running') return tc;
+      mutated = true;
+
+      // Recalculate from lastRunResult
+      let newStatus: 'pending' | 'passed' | 'failed' = 'pending';
+      let fixedLastRunResult = tc.lastRunResult;
+      if (fixedLastRunResult) {
+        if (fixedLastRunResult.status === 'running' || fixedLastRunResult.status === 'pending') {
+          fixedLastRunResult = {
+            ...fixedLastRunResult,
+            status: 'error' as const,
+            error: 'Connection lost before result was received.',
+            completedAt: fixedLastRunResult.completedAt || Date.now(),
+          };
+        }
+        if (fixedLastRunResult.status === 'passed') newStatus = 'passed';
+        else if (fixedLastRunResult.status === 'failed') newStatus = 'failed';
+      }
+
+      return { ...tc, status: newStatus, lastRunResult: fixedLastRunResult } as TestCase;
+    });
+
+    fixedTestCases[projectId] = updated;
+  }
+
+  // 4. Fix projects with stale running lastRunStatus
+  const fixedProjects = incoming.projects.map((p) => {
+    if (p.lastRunStatus !== 'running') return p;
+    mutated = true;
+
+    // Derive from most recent run
+    const projectRuns = fixedTestRuns[p.id];
+    if (projectRuns && projectRuns.length > 0) {
+      const latest = projectRuns[0];
+      return {
+        ...p,
+        lastRunStatus: (latest.failed > 0 ? 'failed' : 'passed') as 'passed' | 'failed',
+      };
+    }
+    return { ...p, lastRunStatus: 'never_run' as const };
+  });
+
+  // 5. Fix groups with stale running lastRunStatus
+  const fixedGroups = { ...incoming.testGroups };
+  for (const projectId of Object.keys(fixedGroups)) {
+    const groups = fixedGroups[projectId];
+    if (!groups) continue;
+
+    fixedGroups[projectId] = groups.map((g) => {
+      if (g.lastRunStatus !== 'running') return g;
+      mutated = true;
+      return { ...g, lastRunStatus: 'failed' as const };
+    });
+  }
+
+  if (!mutated && !hadActiveRuns) return incoming;
+
+  return {
+    ...incoming,
+    activeTestRuns: {},
+    testRuns: fixedTestRuns,
+    testCases: fixedTestCases,
+    projects: fixedProjects,
+    testGroups: fixedGroups,
+    lastUpdated: mutated ? Date.now() : incoming.lastUpdated,
+  };
+}
+
 function reducer(state: QAState, action: QAAction): QAState {
   switch (action.type) {
     case 'CREATE_PROJECT':
@@ -724,19 +855,21 @@ function reducer(state: QAState, action: QAAction): QAState {
     }
 
     case 'LOAD_STATE': {
-      const incomingActiveRuns = action.payload.activeTestRuns || {};
+      // Clean up stale running state from interrupted sessions
+      const cleaned = cleanStaleRunningState(action.payload);
+
       const mergedActiveRuns: Record<string, TestRun> = {
-        ...incomingActiveRuns,
+        ...cleaned.activeTestRuns,
         ...state.activeTestRuns,  // Local runs take precedence
       };
       return {
-        ...action.payload,
+        ...cleaned,
         activeTestRuns: mergedActiveRuns,
-        testGroups: action.payload.testGroups || {},
-        userAccounts: action.payload.userAccounts || {},
-        aiGenerationJobs: action.payload.aiGenerationJobs || {},
-        aiDrafts: action.payload.aiDrafts || {},
-        aiDraftNotifications: action.payload.aiDraftNotifications || {},
+        testGroups: cleaned.testGroups || {},
+        userAccounts: cleaned.userAccounts || {},
+        aiGenerationJobs: cleaned.aiGenerationJobs || {},
+        aiDrafts: cleaned.aiDrafts || {},
+        aiDraftNotifications: cleaned.aiDraftNotifications || {},
         isFirstLoad: false,
       };
     }
