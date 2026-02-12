@@ -783,6 +783,11 @@ export default function DashboardPage() {
                 userAccounts={userAccounts}
                 activeJob={activeAiJob}
                 onJobQueued={handleAiJobQueued}
+                onGoToExecution={() => {
+                  setActiveTab('execution');
+                  setTestCreationMode(null);
+                  void refreshAiGenerationState();
+                }}
               />
             </div>
           );
@@ -913,10 +918,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {aiGenerationJobs
-                    .filter(job => job.status === 'running' || job.status === 'queued' ||
-                            (job.status === 'completed' && job.completedAt && Date.now() - job.completedAt < 300000) ||
-                            (job.status === 'failed' && job.completedAt && Date.now() - job.completedAt < 300000))
-                    .slice(0, 6)
+                    .slice(0, 9)
                     .map(job => (
                       <AiExplorationCard key={job.id} job={job} />
                     ))}
