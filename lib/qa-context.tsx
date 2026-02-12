@@ -115,11 +115,14 @@ function cleanStaleRunningState(incoming: QAState): QAState {
     if (!cases) continue;
 
     const updated = cases.map((tc) => {
-      if (tc.status !== 'running') return tc;
+      const hasStaleStatus = tc.status === 'running';
+      const hasStaleLastRunResult =
+        tc.lastRunResult?.status === 'running' || tc.lastRunResult?.status === 'pending';
+
+      if (!hasStaleStatus && !hasStaleLastRunResult) return tc;
       mutated = true;
 
-      // Recalculate from lastRunResult
-      let newStatus: 'pending' | 'passed' | 'failed' = 'pending';
+      // Fix stale lastRunResult
       let fixedLastRunResult = tc.lastRunResult;
       if (fixedLastRunResult) {
         if (fixedLastRunResult.status === 'running' || fixedLastRunResult.status === 'pending') {
@@ -130,6 +133,11 @@ function cleanStaleRunningState(incoming: QAState): QAState {
             completedAt: fixedLastRunResult.completedAt || Date.now(),
           };
         }
+      }
+
+      // Recalculate tc.status from lastRunResult
+      let newStatus: 'pending' | 'passed' | 'failed' = hasStaleStatus ? 'pending' : tc.status as 'pending' | 'passed' | 'failed';
+      if (hasStaleStatus && fixedLastRunResult) {
         if (fixedLastRunResult.status === 'passed') newStatus = 'passed';
         else if (fixedLastRunResult.status === 'failed') newStatus = 'failed';
       }
