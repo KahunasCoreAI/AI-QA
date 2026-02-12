@@ -19,7 +19,7 @@ interface TestExecutionCardProps {
 function TestExecutionCard({ testCase, result, onSkip, userAccount }: TestExecutionCardProps) {
   const isRunning = result?.status === 'running' || (!result && testCase.status === 'running');
   const elapsed = useElapsedTime(result?.startedAt || null, isRunning);
-  const previewUrl = isRunning ? result?.streamingUrl : undefined;
+  const previewUrl = isRunning ? (result?.streamingUrl || result?.recordingUrl) : undefined;
   const externalViewUrl = result?.recordingUrl || (isRunning ? result?.streamingUrl : undefined);
 
   const getStatusIcon = () => {

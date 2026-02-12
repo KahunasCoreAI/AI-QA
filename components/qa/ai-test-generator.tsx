@@ -44,11 +44,12 @@ export function AITestGenerator({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const hasActiveExploration = activeJob?.status === 'queued' || activeJob?.status === 'running';
 
   const activeStatus = useMemo(() => {
     if (!activeJob) return null;
     if (activeJob.status === 'queued' || activeJob.status === 'running') {
-      return activeJob.progressMessage || 'AI is exploring your app to determine test cases.';
+      return activeJob.progressMessage || 'AI is now checking your app to determine best test cases.';
     }
     if (activeJob.status === 'completed') {
       return `Exploration finished. ${activeJob.draftCount} draft test case${activeJob.draftCount === 1 ? '' : 's'} ready for review.`;
@@ -102,8 +103,8 @@ export function AITestGenerator({
     setError(null);
   };
 
-  // After successful submission — show success panel instead of the form
-  if (submitted) {
+  // After successful submission (or while an exploration is active), show success panel instead of the form.
+  if (submitted || hasActiveExploration) {
     return (
       <div className="space-y-4">
         <Card className="border-[#30a46c]/30 bg-[#30a46c]/[0.03]">
@@ -115,8 +116,8 @@ export function AITestGenerator({
               <div className="space-y-1.5">
                 <h3 className="text-sm font-semibold">AI Exploration Started</h3>
                 <p className="text-xs text-muted-foreground max-w-md">
-                  AI is exploring your app to determine test cases. You can close this screen and
-                  check the <strong>Execution tab</strong> for live progress.
+                  AI is now checking your app to determine best test cases. You can check progress
+                  on the <strong>Execution tab</strong>.
                 </p>
                 <p className="text-xs text-muted-foreground/60 max-w-md">
                   When complete, draft test cases will appear in the Test Cases tab for review.
@@ -134,6 +135,7 @@ export function AITestGenerator({
                   size="sm"
                   className="h-8 text-xs"
                   onClick={handleGenerateAnother}
+                  disabled={hasActiveExploration}
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" />
                   Generate Another

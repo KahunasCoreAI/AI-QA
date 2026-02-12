@@ -8,6 +8,7 @@ export async function GET() {
   try {
     const team = await requireTeamContext();
     enforceRateLimit(`state:get:${team.userId}`, { limit: 120, windowMs: 60_000 });
+    const canManageSettings = canManageTeamSettings(team.email);
 
     const state = await getTeamStateForClient(team.teamId);
     return NextResponse.json({
@@ -16,6 +17,7 @@ export async function GET() {
         id: team.userId,
         email: team.email,
         displayName: team.displayName,
+        canManageSettings,
       },
     });
   } catch (error) {

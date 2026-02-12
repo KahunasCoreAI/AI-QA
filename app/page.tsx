@@ -56,12 +56,6 @@ import type {
 
 type TestCreationMode = 'choice' | 'manual' | 'ai';
 type AccountProviderColumn = 'hyperbrowser' | 'browser-use-cloud';
-const SETTINGS_OWNER_EMAIL = (
-  process.env.NEXT_PUBLIC_SETTINGS_OWNER_EMAIL ||
-  'owner@example.com'
-)
-  .trim()
-  .toLowerCase();
 
 function getProviderProfileKey(provider: BrowserProvider): AccountProfileProviderKey {
   return provider === 'browser-use-cloud' ? 'browserUseCloud' : 'hyperbrowser';
@@ -130,7 +124,7 @@ export default function DashboardPage() {
   const currentProject = getCurrentProject();
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
   const currentUserFirstName = currentViewer?.displayName;
-  const canManageSettings = currentUserEmail === SETTINGS_OWNER_EMAIL;
+  const canManageSettings = currentViewer?.canManageSettings === true;
   const canManageProjects = canManageSettings;
   const testCases = useMemo(
     () => currentProject ? getTestCasesForProject(currentProject.id) : [],
@@ -257,19 +251,12 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!currentProject) return;
 
-    const shouldPoll =
-      testCreationMode === 'ai' ||
-      activeTab === 'execution' ||
-      aiGenerationJobs.some((job) => job.status === 'queued' || job.status === 'running');
-
-    if (!shouldPoll) return;
-
     void refreshAiGenerationState();
     const interval = setInterval(() => {
       void refreshAiGenerationState();
-    }, 4000);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [activeTab, aiGenerationJobs, currentProject, refreshAiGenerationState, testCreationMode]);
+  }, [currentProject, refreshAiGenerationState]);
 
   const handleAiJobQueued = useCallback(() => {
     void refreshAiGenerationState();
@@ -1051,7 +1038,7 @@ export default function DashboardPage() {
               <Card className="border-border/40">
                 <CardContent className="py-8">
                   <p className="text-sm text-muted-foreground">
-                    Only the designated settings owner ({SETTINGS_OWNER_EMAIL}) can manage this page.
+                    Only the designated settings owner can manage this page.
                     {currentUserEmail && (
                       <span className="block mt-1 text-xs text-muted-foreground/60">
                         Signed in as {currentUserEmail}

@@ -14,7 +14,7 @@ interface AiExplorationCardProps {
 export function AiExplorationCard({ job }: AiExplorationCardProps) {
   const isRunning = job.status === 'running' || job.status === 'queued';
   const elapsed = useElapsedTime(job.startedAt || job.createdAt, isRunning);
-  const previewUrl = isRunning ? job.streamingUrl : undefined;
+  const previewUrl = isRunning ? (job.streamingUrl || job.recordingUrl) : undefined;
   const externalViewUrl = job.recordingUrl || (isRunning ? job.streamingUrl : undefined);
 
   const getStatusIcon = () => {

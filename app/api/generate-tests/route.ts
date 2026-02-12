@@ -17,6 +17,7 @@ import { enforceRateLimit } from '@/lib/security/rate-limit';
 import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys, saveTeamState } from '@/lib/server/team-state-store';
+import { releaseAccount, tryAcquireAccount } from '@/lib/server/account-locks';
 
 interface ExecutionCredentials {
   email: string;
@@ -27,6 +28,8 @@ interface ExecutionCredentials {
 
 const RUNNING_STALE_MS = 10 * 60 * 1000;
 const MAX_GENERATED_TESTS = 10;
+const ACCOUNT_WAIT_POLL_MS = 350;
+const ACCOUNT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
 const generatedTestSchema = z.object({
   title: z.string().min(1),
@@ -283,6 +286,41 @@ Generate up to 10 comprehensive but non-duplicative QA test cases for this scope
 Return JSON: { "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "..." }] }`;
 }
 
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function waitForSpecificAccount(accountId: string): Promise<boolean> {
+  const deadline = Date.now() + ACCOUNT_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (tryAcquireAccount(accountId)) return true;
+    await wait(ACCOUNT_WAIT_POLL_MS);
+  }
+  return false;
+}
+
+async function waitForAnyAccount(accountIds: string[], seed: number): Promise<string | undefined> {
+  const uniqueAccountIds = [...new Set(accountIds)];
+  if (uniqueAccountIds.length === 0) return undefined;
+
+  const deadline = Date.now() + ACCOUNT_WAIT_TIMEOUT_MS;
+  let cursor = Math.abs(seed) % uniqueAccountIds.length;
+
+  while (Date.now() < deadline) {
+    for (let i = 0; i < uniqueAccountIds.length; i++) {
+      const accountId = uniqueAccountIds[(cursor + i) % uniqueAccountIds.length];
+      if (tryAcquireAccount(accountId)) {
+        return accountId;
+      }
+    }
+
+    cursor = (cursor + 1) % uniqueAccountIds.length;
+    await wait(ACCOUNT_WAIT_POLL_MS);
+  }
+
+  return undefined;
+}
+
 function updateJobList(
   jobs: AiGenerationJob[],
   jobId: string,
@@ -332,7 +370,7 @@ async function claimNextJob(
       status: 'running',
       startedAt: job.startedAt || now,
       error: undefined,
-      progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
+      progressMessage: 'AI is now checking your app to determine best test cases. You can check progress on the Execution tab.',
     })
   );
 
@@ -352,7 +390,7 @@ async function claimNextJob(
     status: 'running',
     startedAt: chosenJob.startedAt || now,
     error: undefined,
-    progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
+    progressMessage: 'AI is now checking your app to determine best test cases. You can check progress on the Execution tab.',
   };
 }
 
@@ -460,21 +498,48 @@ async function runClaimedJob(teamId: string, userId: string, job: AiGenerationJo
   const provider = getBrowserProvider(settings.browserProvider);
   const projectAccounts = state.userAccounts[job.projectId] || [];
   let selectedAccount: UserAccount | undefined;
+  let lockedAccountId: string | undefined;
   if (job.userAccountId && job.userAccountId !== 'none') {
     if (job.userAccountId === '__any__') {
-      selectedAccount = projectAccounts.find((account) =>
-        settings.browserProvider === 'browser-use-cloud'
-          ? Boolean(account.providerProfiles?.browserUseCloud?.profileId)
-          : Boolean(account.providerProfiles?.hyperbrowser?.profileId)
-      ) || projectAccounts[0];
+      const preferredAccountIds = projectAccounts
+        .filter((account) =>
+          settings.browserProvider === 'browser-use-cloud'
+            ? Boolean(account.providerProfiles?.browserUseCloud?.profileId)
+            : Boolean(account.providerProfiles?.hyperbrowser?.profileId)
+        )
+        .map((account) => account.id);
+      const fallbackAccountIds = projectAccounts.map((account) => account.id);
+      const orderedAccountIds = [...preferredAccountIds, ...fallbackAccountIds];
+      lockedAccountId = await waitForAnyAccount(orderedAccountIds, job.createdAt);
+      if (!lockedAccountId) {
+        await failJob(teamId, userId, job.projectId, job.id, 'No available user account could be allocated.');
+        return;
+      }
+      selectedAccount = projectAccounts.find((account) => account.id === lockedAccountId);
     } else {
       selectedAccount = projectAccounts.find((account) => account.id === job.userAccountId);
+      if (!selectedAccount) {
+        await failJob(teamId, userId, job.projectId, job.id, `Assigned account '${job.userAccountId}' was not found.`);
+        return;
+      }
+      const acquired = await waitForSpecificAccount(selectedAccount.id);
+      if (!acquired) {
+        await failJob(teamId, userId, job.projectId, job.id, 'Assigned account is busy and could not be allocated in time.');
+        return;
+      }
+      lockedAccountId = selectedAccount.id;
     }
+  }
+  if (lockedAccountId && !selectedAccount) {
+    releaseAccount(lockedAccountId);
+    lockedAccountId = undefined;
+    await failJob(teamId, userId, job.projectId, job.id, 'Allocated account could not be resolved.');
+    return;
   }
   const credentials = resolveAccountCredentials(selectedAccount, settings);
 
   await updateJob(teamId, userId, job.projectId, job.id, {
-    progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
+    progressMessage: 'AI is now checking your app to determine best test cases. You can check progress on the Execution tab.',
   });
 
   const explorationTask = buildExplorationTask(job.prompt, project.websiteUrl, job.groupName, credentials);
@@ -494,9 +559,9 @@ async function runClaimedJob(teamId: string, userId: string, job: AiGenerationJo
             recordingUrl: recordingUrl,
           });
         },
-        onTaskCreated: async (taskId: string, sessionId: string) => {
+        onTaskCreated: async () => {
           await updateJob(teamId, userId, job.projectId, job.id, {
-            progressMessage: 'AI is exploring your app to determine test cases. You can close this screen.',
+            progressMessage: 'AI is now checking your app to determine best test cases. You can check progress on the Execution tab.',
           });
         },
       }
@@ -569,6 +634,8 @@ Rules:
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to generate test drafts.';
     await failJob(teamId, userId, job.projectId, job.id, message);
+  } finally {
+    releaseAccount(lockedAccountId);
   }
 }
 
@@ -645,7 +712,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         jobId: job.id,
-        message: 'AI is exploring your app to determine test cases. You can close this screen.',
+        message: 'AI is now checking your app to determine best test cases. You can check progress on the Execution tab.',
       },
       { status: 202 }
     );

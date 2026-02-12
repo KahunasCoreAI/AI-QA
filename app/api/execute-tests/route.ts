@@ -8,6 +8,7 @@ import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
 import { registerRun, unregisterRun } from '@/lib/server/active-runs';
+import { isAccountInUse, releaseAccount, tryAcquireAccount } from '@/lib/server/account-locks';
 
 interface ExecuteTestsRequest {
   runId?: string;
@@ -40,6 +41,11 @@ function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> 
         ? 'browser-use-cloud'
         : merged.browserProvider,
   };
+}
+
+function normalizeRequestedAccountId(userAccountId?: string): string | undefined {
+  if (!userAccountId || userAccountId === 'none') return undefined;
+  return userAccountId;
 }
 
 export async function POST(request: NextRequest) {
@@ -85,6 +91,7 @@ export async function POST(request: NextRequest) {
       // Already closed
     }
   };
+  let releaseRunLocks = () => {};
 
   // Start processing in the background
   (async () => {
@@ -156,8 +163,10 @@ export async function POST(request: NextRequest) {
       // Build account lookup from server-side team state only.
       const accountMap = buildAccountMapFromTeamState(testCases, persistedState, settings);
 
-      // Account-aware scheduler with round-robin for "__any__" assignments
-      const lockedAccounts = new Set<string>();
+      // Account-aware scheduler with round-robin for "__any__" assignments.
+      // Locks are global across runs, so two concurrent runs cannot use the
+      // same account at the same time.
+      const lockedAccountsByRun = new Set<string>();
       const allAccountIds = Array.from(accountMap.keys());
       const preferredAnyAccountIds = allAccountIds.filter((accountId) =>
         Boolean(accountMap.get(accountId)?.profileId)
@@ -167,9 +176,10 @@ export async function POST(request: NextRequest) {
       const results: TestResult[] = [];
       const pending = [...testCases];
       let running = 0;
+      let waitTimer: ReturnType<typeof setTimeout> | null = null;
 
       function hasUnlockedAccount(accountIds: string[]): boolean {
-        return accountIds.some((accountId) => !lockedAccounts.has(accountId));
+        return accountIds.some((accountId) => !isAccountInUse(accountId));
       }
 
       function pickFromPool(
@@ -182,7 +192,7 @@ export async function POST(request: NextRequest) {
         for (let i = 0; i < accountIds.length; i++) {
           const idx = (startIndex + i) % accountIds.length;
           const accountId = accountIds[idx];
-          if (lockedAccounts.has(accountId)) continue;
+          if (isAccountInUse(accountId)) continue;
 
           if (pool === 'preferred') {
             preferredRoundRobinIndex = (idx + 1) % accountIds.length;
@@ -210,51 +220,109 @@ export async function POST(request: NextRequest) {
         return pickFromPool(allAccountIds, 'fallback');
       }
 
+      releaseRunLocks = () => {
+        for (const accountId of lockedAccountsByRun) {
+          releaseAccount(accountId);
+        }
+        lockedAccountsByRun.clear();
+      };
+
+      function scheduleRetry(trySchedule: () => void) {
+        if (waitTimer) return;
+        waitTimer = setTimeout(() => {
+          waitTimer = null;
+          trySchedule();
+        }, 350);
+      }
+
+      function clearRetry() {
+        if (!waitTimer) return;
+        clearTimeout(waitTimer);
+        waitTimer = null;
+      }
+
+      async function recordAccountError(testCase: TestCase, reason: string) {
+        const errorResult: TestResult = {
+          id: generateId(),
+          testCaseId: testCase.id,
+          status: 'error',
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          error: reason,
+          reason,
+        };
+
+        results.push(errorResult);
+        await sendEvent({
+          type: 'test_error',
+          testCaseId: testCase.id,
+          timestamp: Date.now(),
+          data: {
+            error: reason,
+            result: errorResult,
+          },
+        });
+      }
+
       await new Promise<void>((resolve) => {
+        let isResolved = false;
+
+        const finalize = () => {
+          if (isResolved) return;
+          isResolved = true;
+          clearRetry();
+          resolve();
+        };
+
         function trySchedule() {
+          if (isResolved) return;
+          clearRetry();
+          if (runSignal?.aborted && running === 0) {
+            finalize();
+            return;
+          }
+
           while (running < parallelLimit && pending.length > 0) {
             const idx = pending.findIndex((tc) => {
-              if (!tc.userAccountId) return true;
-              if (tc.userAccountId === '__any__') return hasFreeAnyAccount();
-              return !lockedAccounts.has(tc.userAccountId);
+              const requestedAccountId = normalizeRequestedAccountId(tc.userAccountId);
+              if (!requestedAccountId) return true;
+              if (requestedAccountId === '__any__') return hasFreeAnyAccount();
+              if (!accountMap.has(requestedAccountId)) return true;
+              return !isAccountInUse(requestedAccountId);
             });
             if (idx === -1) break; // all remaining need locked accounts
 
             const testCase = pending.splice(idx, 1)[0];
 
-            // Resolve the actual account ID to use
-            let resolvedAccountId = testCase.userAccountId;
-            if (resolvedAccountId === '__any__') {
+            // Resolve the actual account ID to use.
+            const requestedAccountId = normalizeRequestedAccountId(testCase.userAccountId);
+            let resolvedAccountId = requestedAccountId;
+            if (requestedAccountId === '__any__') {
               resolvedAccountId = pickFreeAccount();
+              if (!resolvedAccountId) {
+                pending.push(testCase);
+                continue;
+              }
             }
 
             const credentials = resolvedAccountId ? accountMap.get(resolvedAccountId) : undefined;
-
             if (resolvedAccountId && !credentials) {
-              const missingAccountResult: TestResult = {
-                id: generateId(),
-                testCaseId: testCase.id,
-                status: 'error',
-                startedAt: Date.now(),
-                completedAt: Date.now(),
-                error: `Assigned account '${resolvedAccountId}' was not found in shared team state.`,
-                reason: 'Assigned account was missing.',
-              };
-
-              void sendEvent({
-                type: 'test_error',
-                testCaseId: testCase.id,
-                timestamp: Date.now(),
-                data: {
-                  error: missingAccountResult.error,
-                  result: missingAccountResult,
-                },
-              });
-              results.push(missingAccountResult);
+              void recordAccountError(
+                testCase,
+                `Assigned account '${resolvedAccountId}' was not found in shared team state.`
+              );
               continue;
             }
 
-            if (resolvedAccountId) lockedAccounts.add(resolvedAccountId);
+            if (resolvedAccountId && !tryAcquireAccount(resolvedAccountId)) {
+              // Race: account was claimed by another run between selection and lock.
+              pending.push(testCase);
+              continue;
+            }
+
+            if (resolvedAccountId) {
+              lockedAccountsByRun.add(resolvedAccountId);
+            }
             running++;
 
             // Capture resolvedAccountId in closure for unlock
@@ -273,47 +341,58 @@ export async function POST(request: NextRequest) {
                 });
               })
               .finally(() => {
-                if (lockedId) lockedAccounts.delete(lockedId);
+                if (lockedId) {
+                  releaseAccount(lockedId);
+                  lockedAccountsByRun.delete(lockedId);
+                }
                 running--;
-                if (pending.length === 0 && running === 0) resolve();
+                if (pending.length === 0 && running === 0) finalize();
                 else trySchedule();
               });
           }
 
           if (running === 0 && pending.length > 0) {
-            const unscheduled = pending.splice(0, pending.length);
-            for (const pendingTest of unscheduled) {
-              const reason =
-                pendingTest.userAccountId === '__any__'
-                  ? 'No available user accounts were eligible for this provider.'
-                  : 'No available account could be allocated for this test.';
+            // Remove impossible test assignments immediately (missing account or no accounts at all).
+            for (let i = pending.length - 1; i >= 0; i--) {
+              const pendingTest = pending[i];
+              const requestedAccountId = normalizeRequestedAccountId(pendingTest.userAccountId);
 
-              const unscheduledResult: TestResult = {
-                id: generateId(),
-                testCaseId: pendingTest.id,
-                status: 'error',
-                startedAt: Date.now(),
-                completedAt: Date.now(),
-                error: reason,
-                reason,
-              };
-
-              results.push(unscheduledResult);
-              void sendEvent({
-                type: 'test_error',
-                testCaseId: pendingTest.id,
-                timestamp: Date.now(),
-                data: {
-                  error: reason,
-                  result: unscheduledResult,
-                },
-              });
+              if (!requestedAccountId) continue;
+              if (requestedAccountId === '__any__' && allAccountIds.length === 0) {
+                pending.splice(i, 1);
+                void recordAccountError(
+                  pendingTest,
+                  'No available user accounts were eligible for this provider.'
+                );
+                continue;
+              }
+              if (requestedAccountId !== '__any__' && !accountMap.has(requestedAccountId)) {
+                pending.splice(i, 1);
+                void recordAccountError(
+                  pendingTest,
+                  `Assigned account '${requestedAccountId}' was not found in shared team state.`
+                );
+                continue;
+              }
             }
-            resolve();
+
+            if (pending.length === 0) {
+              finalize();
+              return;
+            }
+
+            if (runSignal?.aborted) {
+              finalize();
+              return;
+            }
+
+            // Remaining tests are waiting for currently busy accounts.
+            // Keep them queued and retry shortly.
+            scheduleRetry(trySchedule);
             return;
           }
 
-          if (running === 0 && pending.length === 0) resolve();
+          if (running === 0 && pending.length === 0) finalize();
         }
         trySchedule();
       });
@@ -343,6 +422,7 @@ export async function POST(request: NextRequest) {
         data: { error: error instanceof Error ? error.message : 'Unknown error' },
       });
     } finally {
+      releaseRunLocks();
       if (runId) unregisterRun(runId);
       await closeWriter();
     }
