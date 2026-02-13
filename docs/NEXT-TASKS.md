@@ -352,6 +352,40 @@ Return as JSON array:
 
 ---
 
+## ~~Task 5: Automated Test Runs on PR Merge~~ ✅ COMPLETED
+
+> **Resolved** — Full automation pipeline implemented and verified.
+
+### What Was Done
+
+End-to-end automation: when a GitHub PR is merged, tests are generated, an AI agent selects relevant existing tests for regression coverage, and the full suite runs headlessly with results recorded.
+
+| File | Change |
+|------|--------|
+| `types/index.ts` | Added `AutomationRun`, `AutomationRunStatus`, `AutomationSettings`; extended `QAState` and `QAAction` |
+| `lib/server/default-state.ts` | Added automation defaults and sanitization |
+| `lib/qa-context.tsx` | 4 new reducer cases, context helpers, init/cleanup for automation state |
+| `components/qa/dashboard-layout.tsx` | Added Automations tab to sidebar navigation |
+| `lib/server/execute-tests.ts` | **New** — Shared `executeTestBatch()` extracted from SSE route |
+| `app/api/execute-tests/route.ts` | Refactored to delegate to shared execution module |
+| `app/api/webhooks/github/route.ts` | Added `after()` background processing, AI test selection agent, full automation flow |
+| `app/api/automations/rerun/route.ts` | **New** — Rerun endpoint with background execution |
+| `components/qa/automations-panel.tsx` | **New** — Table view of automation runs |
+| `components/qa/automation-detail.tsx` | **New** — Detail view with PR info, selection reasoning, and test results |
+| `components/qa/automation-settings-card.tsx` | **New** — Settings card for automation configuration |
+| `components/qa/index.ts` | Added 3 new barrel exports |
+| `app/page.tsx` | Wired automations tab, settings, state, and handlers |
+
+### Key Design Decisions
+
+- **Next.js `after()` API** used for background processing — webhook returns 202 immediately, tests execute after response
+- **Shared execution module** (`executeTestBatch`) reused by both SSE interactive runs and headless automation
+- **AI test selection** uses a structured prompt with 4 prioritized criteria (directly affected, regression risk, previously failing, coverage breadth)
+- **Selection reasoning** stored on `AutomationRun.selectionReason` and displayed in the detail view
+- **Filters** support allowed GitHub usernames and base branch patterns with `*` wildcard matching
+
+---
+
 ## Implementation Order
 
 Recommended sequence based on dependencies:
@@ -363,6 +397,8 @@ Task 1 (User Accounts)    ✅ DONE
   ↓
 Task 2 (Login Profiles)   ✅ DONE
   ↓
+Task 5 (Automations)      ✅ DONE
+  ↓
 Task 4 (Fragments)        ← Independent but most complex; benefits from 1+2 being stable
 ```
 
@@ -373,4 +409,5 @@ Task 4 (Fragments)        ← Independent but most complex; benefits from 1+2 be
 | Task 3 — Session playback fix | ✅ Done | 0 | 5 | Low |
 | Task 1 — User accounts | ✅ Done | 1 | 7 | Medium |
 | Task 2 — Login profiles | ✅ Done | 1 | 6 | Medium |
+| Task 5 — Automated test runs | ✅ Done | 5 | 8 | High |
 | Task 4 — Test fragments | Pending | 4 | 6 | High |
