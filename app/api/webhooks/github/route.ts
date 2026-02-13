@@ -628,6 +628,14 @@ async function processMergedPR(
       nextState = {
         ...nextState,
         aiDrafts: { ...nextState.aiDrafts, [projectId]: updatedDrafts },
+        // Clear unseen drafts notification since all drafts were auto-published
+        aiDraftNotifications: {
+          ...nextState.aiDraftNotifications,
+          [projectId]: {
+            ...nextState.aiDraftNotifications[projectId],
+            hasUnseenDrafts: false,
+          },
+        },
       };
 
       // Add test cases to state
