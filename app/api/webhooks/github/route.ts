@@ -330,7 +330,9 @@ async function processMergedPR(
 }> {
   // Check for idempotency - verify this delivery hasn't been processed already
   // We use the delivery ID to prevent duplicate processing
+  console.log('[webhook:github] Step 1: Loading team state', { teamId, deliveryId });
   const state = await getOrCreateTeamState(teamId);
+  console.log('[webhook:github] Step 1 complete: Team state loaded', { projectCount: state.projects.length });
   
   // Check if any existing job was created from this delivery (exact match only)
   for (const projectId of Object.keys(state.aiGenerationJobs || {})) {
@@ -350,8 +352,9 @@ async function processMergedPR(
 
   // Fetch changed files from the PR
   const [owner, repo] = pr.base.repo.full_name.split('/');
+  console.log('[webhook:github] Step 2: Fetching PR files', { owner, repo, prNumber: pr.number });
   let prFiles: Awaited<ReturnType<typeof fetchPRFiles>>;
-  
+
   try {
     prFiles = await fetchPRFiles(owner, repo, pr.number);
   } catch (error) {
@@ -372,6 +375,8 @@ async function processMergedPR(
     }))
   );
 
+  console.log('[webhook:github] Step 2 complete', { totalFiles: prFiles.totalCount, frontendFiles: frontendFiles.length, components: changedComponents, domains });
+
   if (frontendFiles.length === 0) {
     return {
       success: true,
@@ -381,12 +386,15 @@ async function processMergedPR(
   }
 
   // Generate AI test suggestions
+  console.log('[webhook:github] Step 3: Generating AI test suggestions');
   const testSuggestions = await generateTestSuggestionsForPR(
     pr,
     frontendFiles,
     changedComponents,
     domains
   );
+
+  console.log('[webhook:github] Step 3 complete', { suggestionCount: testSuggestions.length });
 
   if (testSuggestions.length === 0) {
     return {
@@ -479,7 +487,9 @@ async function processMergedPR(
   };
 
   // Save state with system user (null userId)
+  console.log('[webhook:github] Step 4: Saving state', { projectId, jobId, draftCount: drafts.length });
   await saveTeamState(teamId, 'system', nextState);
+  console.log('[webhook:github] Step 4 complete: State saved');
 
   return {
     success: true,
