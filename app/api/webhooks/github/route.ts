@@ -239,36 +239,55 @@ async function generateTestSuggestionsForPR(
   const componentsList = changedComponents.length > 0 ? changedComponents.join(', ') : 'general UI';
   const domainsList = domains.length > 0 ? domains.join(', ') : 'general functionality';
 
-  const system = `You are a senior QA engineer. Based on a merged GitHub pull request, generate high-value test cases that validate the changes.
-Return strict JSON only: { "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "...", "groupName": "..." }] }.
-Rules:
-- Keep tests atomic and actionable
-- Focus on user-facing functionality
-- Include validation and edge cases
-- Use descriptive titles that explain what is being tested
-- Set groupName to a relevant domain from: ${domainKeywords.join(', ')} or "general"`;
+  const system = `You are a QA test generation agent for a web application testing platform.
 
-  const prompt = `A pull request was merged to the repository:
+Your job is to create UI test cases that will be executed by an AI browser agent against a live website. The browser agent navigates pages, clicks elements, fills forms, and verifies visual outcomes — exactly like a human tester.
 
+CRITICAL: The "description" field IS the instruction the browser agent receives. It must be written as concrete, step-by-step browser actions the agent can follow. Do NOT write abstract descriptions, unit test assertions, or backend-focused checks.
+
+GOOD description example:
+"Navigate to the settings page. Click the 'Profile' tab. Change the display name to 'Test User'. Click 'Save'. Verify the success toast appears and the display name updates to 'Test User'."
+
+BAD description example:
+"Verify that the profile update function works correctly and saves data to the database."
+
+RULES:
+- Each test must be atomic — one clear workflow, testable in a single browser session
+- The description must be step-by-step browser actions: navigate, click, type, select, scroll, verify
+- Reference specific UI elements where possible (buttons, links, tabs, form fields) based on what the changed files suggest
+- The expectedOutcome must be something visually observable in the browser (text appears, element is visible, page navigates, toast shows, etc.)
+- Do NOT test internal/backend behavior that isn't visible in the UI
+- Set groupName to a relevant domain from: ${domainKeywords.join(', ')} or "general"
+
+Return strict JSON only:
+{ "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "...", "groupName": "..." }] }`;
+
+  const prompt = `A pull request was merged. Generate UI test cases that validate the changes.
+
+## Pull Request
 PR #${pr.number}: ${pr.title}
-${pr.body || 'No description'}
-Merged by: ${pr.merged_by?.login || 'unknown'}
+Author: ${pr.merged_by?.login || pr.user.login}
 Repository: ${pr.base.repo.full_name}
+Description: ${(pr.body || 'No description').slice(0, 500)}
 
-Changed frontend files (${frontendFiles.length} total):
+## Changed Files (${frontendFiles.length} frontend files)
 ${changedFilesList}
 
-Changed components: ${componentsList}
-Identified domains: ${domainsList}
+## Detected Areas
+Components: ${componentsList}
+Domains: ${domainsList}
 
-Generate 3-5 test cases that validate this PR's changes. Focus on:
-1. Happy path workflows for the changed features
-2. Edge cases and validation
-3. Error states if applicable
-4. Cross-component integration if multiple components changed
+## Instructions
+Generate 3-5 test cases. For each one, think about what a user would actually do in the browser after this change:
+1. Happy path — the primary workflow the PR enables or modifies
+2. Validation / edge cases — incorrect inputs, empty states, boundary values
+3. Error handling — what happens when something goes wrong (if the PR touches error flows)
+4. Regression — adjacent features that could break from these changes
 
-Return JSON with this exact structure:
-{ "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "...", "groupName": "..." }] }`;
+Each test description must be step-by-step browser actions the AI agent can execute.
+Each expectedOutcome must describe what should be visually true in the browser after the steps.
+
+Return JSON: { "testCases": [{ "title": "...", "description": "...", "expectedOutcome": "...", "groupName": "..." }] }`;
 
   try {
     const { text } = await generateText({ model, system, prompt });
