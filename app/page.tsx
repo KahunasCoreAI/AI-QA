@@ -119,6 +119,7 @@ export default function DashboardPage() {
   const [selectedTestIds, setSelectedTestIds] = useState<Set<string>>(new Set());
   const [testCreationMode, setTestCreationMode] = useState<TestCreationMode | null>(null);
   const [editingTestCase, setEditingTestCase] = useState<TestCase | undefined>();
+  const [editingDraft, setEditingDraft] = useState<GeneratedTestDraft | null>(null);
   const [viewingTestCase, setViewingTestCase] = useState<TestCase | null>(null);
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
   const [executionViewRunId, setExecutionViewRunId] = useState<string | null>(null);
@@ -345,12 +346,14 @@ export default function DashboardPage() {
     setActiveTab(tab);
     setTestCreationMode(null);
     setViewingTestCase(null);
+    setEditingDraft(null);
   }, []);
 
   // View test case detail
   const handleViewTestCase = useCallback((testCase: TestCase) => {
     setViewingTestCase(testCase);
     setTestCreationMode(null);
+    setEditingDraft(null);
   }, []);
 
   // Project handlers
@@ -391,6 +394,7 @@ export default function DashboardPage() {
     // Reset sub-views when switching projects
     setTestCreationMode(null);
     setViewingTestCase(null);
+    setEditingDraft(null);
     setSelectedTestIds(new Set());
     setExecutionViewRunId(null);
   }, [setCurrentProject]);
@@ -406,10 +410,18 @@ export default function DashboardPage() {
     }
     setTestCreationMode(null);
     setEditingTestCase(undefined);
+    setEditingDraft(null);
   }, [currentProject, editingTestCase, createTestCase, updateTestCase]);
 
   const handleEditTestCase = useCallback((testCase: TestCase) => {
     setEditingTestCase(testCase);
+    setEditingDraft(null);
+    setTestCreationMode('manual');
+  }, []);
+
+  const handleEditDraft = useCallback((draft: GeneratedTestDraft) => {
+    setEditingDraft(draft);
+    setEditingTestCase(undefined);
     setTestCreationMode('manual');
   }, []);
 
@@ -766,21 +778,28 @@ export default function DashboardPage() {
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
-                  setTestCreationMode(editingTestCase ? null : 'choice');
+                  setTestCreationMode(editingTestCase || editingDraft ? null : 'choice');
                   setEditingTestCase(undefined);
+                  setEditingDraft(null);
                 }}>
                   <ArrowLeft className="mr-1.5 h-3 w-3" />
                   Back
                 </Button>
               </div>
               <TestCaseEditor
-                testCase={editingTestCase}
+                testCase={editingTestCase || (editingDraft ? {
+                  title: editingDraft.title,
+                  description: editingDraft.description,
+                  expectedOutcome: editingDraft.expectedOutcome,
+                  userAccountId: editingDraft.userAccountId,
+                } : undefined)}
                 websiteUrl={currentProject.websiteUrl}
                 userAccounts={userAccounts}
                 onSave={handleSaveTestCase}
                 onCancel={() => {
                   setTestCreationMode(null);
                   setEditingTestCase(undefined);
+                  setEditingDraft(null);
                 }}
               />
             </div>
@@ -852,6 +871,7 @@ export default function DashboardPage() {
               parallelLimit={state.settings.parallelLimit}
               onSaveAsGroupClick={() => setCreateGroupDialogOpen(true)}
               onRemoveFromGroup={handleRemoveFromGroup}
+              onEditDraft={handleEditDraft}
               onPublishDrafts={handlePublishDrafts}
               onDiscardDrafts={handleDiscardDrafts}
               onDraftsViewed={handleDraftsViewed}

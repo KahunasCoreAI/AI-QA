@@ -44,6 +44,7 @@ interface TestCaseListProps {
   parallelLimit: number;
   onSaveAsGroupClick: () => void;
   onRemoveFromGroup: (testCaseId: string, group: TestGroup) => void;
+  onEditDraft?: (draft: GeneratedTestDraft) => void;
   onPublishDrafts?: (draftIds: string[], groupName?: string) => void;
   onDiscardDrafts?: (draftIds: string[]) => void;
   onDraftsViewed?: () => void;
@@ -84,6 +85,7 @@ export function TestCaseList({
   parallelLimit,
   onSaveAsGroupClick,
   onRemoveFromGroup,
+  onEditDraft,
   onPublishDrafts,
   onDiscardDrafts,
   onDraftsViewed,
@@ -325,8 +327,12 @@ export function TestCaseList({
               {draftRows.map((draft) => {
                 const isSelectable = draft.status === 'draft';
                 return (
-                  <TableRow key={draft.id} className={cn(!isSelectable && 'opacity-70')}>
-                    <TableCell>
+                  <TableRow
+                    key={draft.id}
+                    className={cn('cursor-pointer hover:bg-accent/30', !isSelectable && 'opacity-70')}
+                    onClick={() => onEditDraft?.(draft)}
+                  >
+                    <TableCell onClick={(event) => event.stopPropagation()}>
                       <Checkbox
                         checked={selectedDraftIds.has(draft.id)}
                         disabled={!isSelectable}
