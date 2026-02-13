@@ -314,54 +314,109 @@ async function selectTestsForAutomation(
   pr: GitHubPullRequestEvent['pull_request'],
   existingTestCases: TestCase[],
   newTestCaseIds: string[],
-  testCount: number
-): Promise<{ selectedExistingIds: string[]; selectedNewIds: string[] }> {
+  testCount: number,
+  changedFiles: string[],
+  changedComponents: string[],
+): Promise<{ selectedExistingIds: string[]; selectedNewIds: string[]; selectionReason: string }> {
   // Always include all new tests (generated from this PR)
   const selectedNewIds = [...newTestCaseIds];
   const remainingSlots = Math.max(0, testCount - selectedNewIds.length);
 
   if (remainingSlots === 0 || existingTestCases.length === 0) {
-    return { selectedExistingIds: [], selectedNewIds: selectedNewIds.slice(0, testCount) };
+    const reason = selectedNewIds.length > 0
+      ? `All ${selectedNewIds.length} test slot${selectedNewIds.length !== 1 ? 's' : ''} filled by newly generated tests for this PR.`
+      : 'No existing tests available to select from.';
+    return { selectedExistingIds: [], selectedNewIds: selectedNewIds.slice(0, testCount), selectionReason: reason };
   }
 
   // Use AI to select the most relevant existing tests
   const model = getModel(DEFAULT_AI_MODEL);
-  const testCatalogue = existingTestCases
-    .filter((tc) => !newTestCaseIds.includes(tc.id))
-    .slice(0, 50) // Limit context
-    .map((tc) => `- [${tc.id}] ${tc.title}: ${tc.description.slice(0, 100)}`)
+  const candidateTests = existingTestCases
+    .filter((tc) => !newTestCaseIds.includes(tc.id));
+  const testCatalogue = candidateTests
+    .slice(0, 50)
+    .map((tc) => `- [${tc.id}] ${tc.title}: ${tc.description.slice(0, 150)}`)
     .join('\n');
 
   if (!testCatalogue) {
-    return { selectedExistingIds: [], selectedNewIds };
+    return { selectedExistingIds: [], selectedNewIds, selectionReason: 'No existing tests available to select from.' };
   }
+
+  const changedFilesList = changedFiles.slice(0, 25).join('\n  ');
+  const componentsList = changedComponents.length > 0
+    ? `\nChanged components/areas: ${changedComponents.join(', ')}`
+    : '';
 
   try {
     const { text } = await generateText({
       model,
-      system: 'You select test cases most relevant to a code change. Return strict JSON only: { "selectedIds": ["id1", "id2"] }',
-      prompt: `PR #${pr.number}: ${pr.title}\n${pr.body?.slice(0, 300) || 'No description'}\n\nSelect up to ${remainingSlots} existing test cases most likely affected by this change:\n${testCatalogue}\n\nReturn JSON: { "selectedIds": [...] }`,
+      system: `You are a QA test selection agent for a web application testing platform.
+
+Your job is to choose the most valuable existing test cases to run as regression tests after a code change (pull request merge). The tests are UI tests executed by an AI browser agent against a live website.
+
+SELECTION CRITERIA (in priority order):
+1. DIRECTLY AFFECTED — Tests that exercise UI features or pages explicitly touched by the changed files. These are the highest priority.
+2. REGRESSION RISK — Tests for features that are adjacent to or depend on the changed code. For example, if a checkout flow changed, payment and order confirmation tests are high regression risk.
+3. PREVIOUSLY FAILING — If a test description suggests it covers a known issue area, prefer it to catch regressions.
+4. COVERAGE BREADTH — Among equally relevant tests, prefer diversity (different features/pages) over redundancy.
+
+Do NOT select tests that have no plausible connection to the change just to fill slots. It's better to select fewer, highly relevant tests than to pad the list.
+
+Respond with strict JSON only:
+{
+  "selectedIds": ["id1", "id2"],
+  "reason": "Brief 1-2 sentence explanation of why these tests were selected and what risk areas they cover."
+}`,
+      prompt: `## Pull Request
+PR #${pr.number}: ${pr.title}
+Author: ${pr.user.login}
+Description: ${pr.body?.slice(0, 500) || 'No description provided'}
+
+## Changed Files
+  ${changedFilesList}${componentsList}
+
+## New Tests Already Included (${selectedNewIds.length})
+These were generated specifically for this PR and are already selected. You do NOT need to select them.
+
+## Existing Test Catalogue (${candidateTests.length} available)
+Select up to ${remainingSlots} of the most relevant existing tests to run alongside the new ones:
+${testCatalogue}
+
+Return JSON with selectedIds and reason.`,
     });
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       const ids: string[] = Array.isArray(parsed.selectedIds) ? parsed.selectedIds : [];
-      const validIds = ids.filter((id) => existingTestCases.some((tc) => tc.id === id));
-      return { selectedExistingIds: validIds.slice(0, remainingSlots), selectedNewIds };
+      const validIds = ids.filter((id) => candidateTests.some((tc) => tc.id === id));
+      const aiReason: string = typeof parsed.reason === 'string' ? parsed.reason : '';
+
+      const newCount = selectedNewIds.length;
+      const existingCount = validIds.length;
+      const reason = aiReason
+        || `Selected ${existingCount} existing test${existingCount !== 1 ? 's' : ''} based on relevance to changed files.`;
+      const fullReason = newCount > 0
+        ? `${newCount} new test${newCount !== 1 ? 's' : ''} generated from this PR. ${reason}`
+        : reason;
+
+      return { selectedExistingIds: validIds.slice(0, remainingSlots), selectedNewIds, selectionReason: fullReason };
     }
   } catch (error) {
     console.error('AI test selection failed, falling back to recent tests:', error);
   }
 
   // Fallback: select most recently created existing tests
-  const fallbackIds = existingTestCases
-    .filter((tc) => !newTestCaseIds.includes(tc.id))
+  const fallbackIds = candidateTests
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, remainingSlots)
     .map((tc) => tc.id);
 
-  return { selectedExistingIds: fallbackIds, selectedNewIds };
+  const fallbackReason = selectedNewIds.length > 0
+    ? `${selectedNewIds.length} new test${selectedNewIds.length !== 1 ? 's' : ''} generated from this PR. ${fallbackIds.length} most recent existing tests selected as fallback (AI selection unavailable).`
+    : `${fallbackIds.length} most recent existing tests selected as fallback (AI selection unavailable).`;
+
+  return { selectedExistingIds: fallbackIds, selectedNewIds, selectionReason: fallbackReason };
 }
 
 // Process a merged PR and create draft tests
@@ -588,11 +643,13 @@ async function processMergedPR(
       // Select tests for automation (mix of new + existing)
       const allProjectTests = nextState.testCases[targetProjectId] || [];
       const newTestCaseIds = publishedTestCases.map((tc) => tc.id);
-      const { selectedExistingIds, selectedNewIds } = await selectTestsForAutomation(
+      const { selectedExistingIds, selectedNewIds, selectionReason } = await selectTestsForAutomation(
         pr,
         allProjectTests,
         newTestCaseIds,
-        autoSettings.testCount
+        autoSettings.testCount,
+        frontendFiles,
+        changedComponents,
       );
 
       const allSelectedIds = [...selectedNewIds, ...selectedExistingIds];
@@ -619,6 +676,7 @@ async function processMergedPR(
         passed: 0,
         failed: 0,
         skipped: 0,
+        selectionReason,
       };
 
       // Create TestRun record

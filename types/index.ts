@@ -268,6 +268,7 @@ export interface AutomationRun {
   failed: number;
   skipped: number;
   error?: string;
+  selectionReason?: string;
 }
 
 export interface AutomationSettings {

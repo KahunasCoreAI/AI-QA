@@ -69,6 +69,9 @@ export async function POST(request: NextRequest) {
     passed: 0,
     failed: 0,
     skipped: 0,
+    selectionReason: originalRun.selectionReason
+      ? `Rerun of PR #${originalRun.prNumber}. ${originalRun.selectionReason}`
+      : undefined,
   };
 
   const newTestRun: TestRun = {

@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { ArrowLeft, ExternalLink, Play, CheckCircle2, XCircle, Clock, GitPullRequest } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Play, CheckCircle2, XCircle, Clock, GitPullRequest, Sparkles } from 'lucide-react';
 import { TestResultsTable } from './test-results-table';
 import type { AutomationRun, TestCase, TestRun, TestGroup, UserAccount } from '@/types';
 import { formatRelativeTime, formatDuration } from '@/lib/utils';
@@ -161,6 +161,17 @@ export function AutomationDetail({
           )}
         </CardContent>
       </Card>
+
+      {/* Selection Reasoning */}
+      {automationRun.selectionReason && (
+        <div className="flex items-start gap-2.5 rounded-md border border-border/40 bg-muted/20 px-3.5 py-2.5">
+          <Sparkles className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
+          <div className="space-y-0.5 min-w-0">
+            <div className="text-[11px] font-medium text-muted-foreground">Test Selection Reasoning</div>
+            <p className="text-xs text-foreground/80 leading-relaxed">{automationRun.selectionReason}</p>
+          </div>
+        </div>
+      )}
 
       {/* Test Results */}
       {linkedTestRuns.length > 0 ? (
