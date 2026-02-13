@@ -34,6 +34,7 @@ const defaultSettings: QASettings = {
   hyperbrowserModel: DEFAULT_HYPERBROWSER_MODEL,
   browserUseCloudModel: DEFAULT_BROWSER_USE_CLOUD_MODEL,
   providerApiKeys: {},
+  draftUserAccounts: true,
 };
 
 const initialState: QAState = {

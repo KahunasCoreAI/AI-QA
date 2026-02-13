@@ -260,6 +260,19 @@ export function SettingsPanel({
               </p>
             </div>
           </div>
+
+          <div className="flex items-center justify-between rounded-md border border-border/40 bg-muted/20 px-3 py-2.5">
+            <div className="space-y-0.5">
+              <Label className="text-xs font-medium">Assign user accounts to draft test cases</Label>
+              <p className="text-[11px] text-muted-foreground/70">
+                When enabled, AI-generated draft test cases will use &quot;Any Available Account&quot; by default.
+              </p>
+            </div>
+            <Switch
+              checked={settings.draftUserAccounts}
+              onCheckedChange={(enabled) => onSettingsChange({ draftUserAccounts: enabled })}
+            />
+          </div>
         </CardContent>
       </Card>
 

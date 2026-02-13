@@ -457,6 +457,7 @@ async function processMergedPR(
     description: suggestion.description,
     expectedOutcome: suggestion.expectedOutcome,
     groupName: suggestion.groupName,
+    userAccountId: state.settings.draftUserAccounts ? '__any__' : undefined,
     status: 'draft' as const,
     createdAt: now + index,
   }));

@@ -126,6 +126,7 @@ export interface QASettings {
   hyperbrowserModel: string;
   browserUseCloudModel: string;
   providerApiKeys: ProviderApiKeys;
+  draftUserAccounts: boolean;
 }
 
 // Bulk test generation types
