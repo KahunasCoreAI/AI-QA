@@ -149,7 +149,12 @@ export async function POST(request: NextRequest) {
       aiDraftNotifications: {
         ...state.aiDraftNotifications,
         [body.projectId]: {
-          hasUnseenDrafts: remainingDrafts.some((draft) => draft.status === 'draft'),
+          hasUnseenDrafts: (() => {
+            const lastSeenAt = state.aiDraftNotifications[body.projectId]?.lastSeenAt;
+            return lastSeenAt
+              ? remainingDrafts.some((d) => d.status === 'draft' && d.createdAt > lastSeenAt)
+              : remainingDrafts.some((d) => d.status === 'draft');
+          })(),
           lastSeenAt: state.aiDraftNotifications[body.projectId]?.lastSeenAt,
         },
       },

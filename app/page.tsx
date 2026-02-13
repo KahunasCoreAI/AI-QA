@@ -326,6 +326,17 @@ export default function DashboardPage() {
   const handleDiscardDrafts = useCallback(async (draftIds: string[]) => {
     if (!currentProject || draftIds.length === 0) return;
     setIsPublishingDrafts(true);
+
+    // Optimistic local update: remove discarded drafts from local state immediately.
+    // This ensures the pending auto-save timer is replaced with correct state (no discarded drafts),
+    // preventing the race condition where an old auto-save restores the draft on the server.
+    const discardSet = new Set(draftIds);
+    const currentDrafts = getAiDraftsForProject(currentProject.id);
+    const currentJobs = getAiGenerationJobsForProject(currentProject.id);
+    const currentNotification = getAiDraftNotificationForProject(currentProject.id);
+    const optimisticDrafts = currentDrafts.filter((d) => !discardSet.has(d.id));
+    syncAiGenerationProjectState(currentProject.id, currentJobs, optimisticDrafts, currentNotification);
+
     try {
       const response = await fetch('/api/generate-tests/discard', {
         method: 'POST',
@@ -350,7 +361,7 @@ export default function DashboardPage() {
     } finally {
       setIsPublishingDrafts(false);
     }
-  }, [currentProject, dispatch, refreshAiGenerationState]);
+  }, [currentProject, dispatch, refreshAiGenerationState, getAiDraftsForProject, getAiGenerationJobsForProject, syncAiGenerationProjectState, getAiDraftNotificationForProject]);
 
   const handleDraftsViewed = useCallback(() => {
     if (!currentProject) return;
@@ -439,7 +450,8 @@ export default function DashboardPage() {
         d.id === draftId ? { ...d, status: 'published' as const, publishedAt: Date.now() } : d
       );
       const currentJobs = getAiGenerationJobsForProject(projectId);
-      syncAiGenerationProjectState(projectId, currentJobs, updatedDrafts);
+      const currentNotification = getAiDraftNotificationForProject(projectId);
+      syncAiGenerationProjectState(projectId, currentJobs, updatedDrafts, currentNotification);
 
       // Persist to server: discard endpoint removes non-draft entries from persisted state
       void fetch('/api/generate-tests/discard', {
@@ -452,7 +464,7 @@ export default function DashboardPage() {
     setTestCreationMode(null);
     setEditingTestCase(undefined);
     setEditingDraft(null);
-  }, [currentProject, editingTestCase, editingDraft, createTestCase, updateTestCase, getAiDraftsForProject, getAiGenerationJobsForProject, syncAiGenerationProjectState]);
+  }, [currentProject, editingTestCase, editingDraft, createTestCase, updateTestCase, getAiDraftsForProject, getAiGenerationJobsForProject, getAiDraftNotificationForProject, syncAiGenerationProjectState]);
 
   const handleEditTestCase = useCallback((testCase: TestCase) => {
     setEditingTestCase(testCase);
