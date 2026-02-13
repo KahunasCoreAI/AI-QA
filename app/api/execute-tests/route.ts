@@ -681,6 +681,8 @@ function buildGoalFromTestCase(
 ): string {
   let goal = '';
 
+  goal += `IMPORTANT: If at any point in the test you see a screen that has an error message, stop immediately. You must fail the test and detail what happened and where the error appeared.\n\n`;
+
   if (credentials) {
     if (credentials.profileId) {
       goal += `IMPORTANT: Reuse the existing authenticated browser profile/session for this account.\n`;
