@@ -243,6 +243,41 @@ export interface BugReport {
   additionalNotes?: string;
 }
 
+// Automation types
+export type AutomationRunStatus = 'pending' | 'selecting_tests' | 'running' | 'completed' | 'failed';
+
+export interface AutomationRun {
+  id: string;
+  projectId: string;
+  prNumber: number;
+  prTitle: string;
+  prUrl: string;
+  prAuthor: string;
+  baseBranch: string;
+  headBranch: string;
+  deliveryId: string;
+  selectedTestCaseIds: string[];
+  generatedTestCaseIds: string[];
+  totalTests: number;
+  testRunId?: string;
+  status: AutomationRunStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface AutomationSettings {
+  enabled: boolean;
+  targetProjectId: string | null;
+  testCount: number;
+  allowedGitHubUsernames: string[];
+  branchPatterns: string[];
+}
+
 // State types for context
 export interface QAState {
   projects: Project[];
@@ -254,6 +289,8 @@ export interface QAState {
   aiGenerationJobs: Record<string, AiGenerationJob[]>; // keyed by projectId
   aiDrafts: Record<string, GeneratedTestDraft[]>; // keyed by projectId
   aiDraftNotifications: Record<string, AiDraftNotification>; // keyed by projectId
+  automationRuns: Record<string, AutomationRun[]>; // keyed by projectId
+  automationSettings: AutomationSettings;
   settings: QASettings;
   activeTestRuns: Record<string, TestRun>;
   lastUpdated: number | null;
@@ -302,6 +339,10 @@ export type QAAction =
   | { type: 'DELETE_TEST_RUN'; payload: { runId: string; projectId: string } }
   | { type: 'CLEAR_TEST_RUNS'; payload: { projectId: string } }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<QASettings> }
+  | { type: 'CREATE_AUTOMATION_RUN'; payload: AutomationRun }
+  | { type: 'UPDATE_AUTOMATION_RUN'; payload: { id: string; projectId: string; updates: Partial<AutomationRun> } }
+  | { type: 'DELETE_AUTOMATION_RUN'; payload: { id: string; projectId: string } }
+  | { type: 'UPDATE_AUTOMATION_SETTINGS'; payload: Partial<AutomationSettings> }
   | { type: 'LOAD_STATE'; payload: QAState }
   | { type: 'SET_FIRST_LOAD'; payload: boolean }
   | { type: 'RESET' };

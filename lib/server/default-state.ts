@@ -1,4 +1,4 @@
-import type { QASettings, QAState, TestRun } from '@/types';
+import type { AutomationSettings, QASettings, QAState, TestRun } from '@/types';
 
 const DEFAULT_AI_MODEL = process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'openai/gpt-5.2';
 const DEFAULT_BROWSER_PROVIDER = 'hyperbrowser-browser-use' as const;
@@ -21,6 +21,16 @@ export function buildDefaultSettings(): QASettings {
   };
 }
 
+export function buildDefaultAutomationSettings(): AutomationSettings {
+  return {
+    enabled: false,
+    targetProjectId: null,
+    testCount: 5,
+    allowedGitHubUsernames: [],
+    branchPatterns: [],
+  };
+}
+
 export function buildDefaultState(): QAState {
   return {
     projects: [],
@@ -32,6 +42,8 @@ export function buildDefaultState(): QAState {
     aiGenerationJobs: {},
     aiDrafts: {},
     aiDraftNotifications: {},
+    automationRuns: {},
+    automationSettings: buildDefaultAutomationSettings(),
     settings: buildDefaultSettings(),
     activeTestRuns: {},
     lastUpdated: null,
@@ -78,6 +90,28 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
       raw.aiDraftNotifications && typeof raw.aiDraftNotifications === 'object'
         ? raw.aiDraftNotifications
         : base.aiDraftNotifications,
+    automationRuns:
+      raw.automationRuns && typeof raw.automationRuns === 'object'
+        ? raw.automationRuns
+        : base.automationRuns,
+    automationSettings: (() => {
+      const defaults = buildDefaultAutomationSettings();
+      const incoming = raw.automationSettings;
+      if (!incoming || typeof incoming !== 'object') return defaults;
+      return {
+        enabled: typeof incoming.enabled === 'boolean' ? incoming.enabled : defaults.enabled,
+        targetProjectId: typeof incoming.targetProjectId === 'string' || incoming.targetProjectId === null
+          ? incoming.targetProjectId
+          : defaults.targetProjectId,
+        testCount: Math.max(1, Math.min(20, Math.floor(Number(incoming.testCount) || defaults.testCount))),
+        allowedGitHubUsernames: Array.isArray(incoming.allowedGitHubUsernames)
+          ? incoming.allowedGitHubUsernames
+          : defaults.allowedGitHubUsernames,
+        branchPatterns: Array.isArray(incoming.branchPatterns)
+          ? incoming.branchPatterns
+          : defaults.branchPatterns,
+      };
+    })(),
     settings,
     activeTestRuns: (() => {
       const candidate = raw as Record<string, unknown>;

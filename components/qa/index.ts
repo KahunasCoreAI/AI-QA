@@ -13,3 +13,6 @@ export { CreateGroupDialog } from './create-group-dialog';
 export { TestGroupCard } from './test-group-card';
 export { UserAccountsManager } from './user-accounts-manager';
 export { AiExplorationCard } from './ai-exploration-card';
+export { AutomationsPanel } from './automations-panel';
+export { AutomationDetail } from './automation-detail';
+export { AutomationSettingsCard } from './automation-settings-card';

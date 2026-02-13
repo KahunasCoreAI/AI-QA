@@ -18,6 +18,7 @@ import {
   TestTube2,
   Play,
   History,
+  Zap,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -34,7 +35,7 @@ import {
 } from 'lucide-react';
 import type { Project } from '@/types';
 
-export type TabType = 'tests' | 'accounts' | 'execution' | 'history' | 'settings';
+export type TabType = 'tests' | 'accounts' | 'execution' | 'history' | 'automations' | 'settings';
 // 'settings' is navigated via the header cog, not the sidebar nav
 
 interface DashboardLayoutProps {
@@ -56,6 +57,7 @@ const navItems = [
   { id: 'accounts' as const, icon: Users, label: 'Accounts' },
   { id: 'execution' as const, icon: Play, label: 'Execution' },
   { id: 'history' as const, icon: History, label: 'History' },
+  { id: 'automations' as const, icon: Zap, label: 'Automations' },
 ];
 
 // All nav items including settings (for breadcrumb label lookup)

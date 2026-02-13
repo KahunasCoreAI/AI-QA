@@ -17,6 +17,9 @@ import {
   AiExplorationCard,
   CreateGroupDialog,
   UserAccountsManager,
+  AutomationsPanel,
+  AutomationDetail,
+  AutomationSettingsCard,
 } from '@/components/qa';
 import type { TabType } from '@/components/qa/dashboard-layout';
 import { Button } from '@/components/ui/button';
@@ -45,6 +48,7 @@ import {
 } from 'lucide-react';
 import type {
   AiGenerationJob,
+  AutomationRun,
   GeneratedTestDraft,
   QAState,
   Project,
@@ -103,6 +107,9 @@ export default function DashboardPage() {
     getAiGenerationJobsForProject,
     getAiDraftsForProject,
     getAiDraftNotificationForProject,
+    deleteAutomationRun,
+    updateAutomationSettings,
+    getAutomationRunsForProject,
     getCurrentProject,
     getTestCasesForProject,
     getTestRunsForProject,
@@ -125,6 +132,7 @@ export default function DashboardPage() {
   const [executionViewRunId, setExecutionViewRunId] = useState<string | null>(null);
   const [isPublishingDrafts, setIsPublishingDrafts] = useState(false);
   const [showAiLockedMessage, setShowAiLockedMessage] = useState(false);
+  const [viewingAutomationRunId, setViewingAutomationRunId] = useState<string | null>(null);
 
   const currentProject = getCurrentProject();
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
@@ -158,6 +166,10 @@ export default function DashboardPage() {
   const aiDraftNotification = useMemo(
     () => currentProject ? getAiDraftNotificationForProject(currentProject.id) : { hasUnseenDrafts: false },
     [currentProject, getAiDraftNotificationForProject]
+  );
+  const automationRuns = useMemo(
+    () => currentProject ? getAutomationRunsForProject(currentProject.id) : [],
+    [currentProject, getAutomationRunsForProject]
   );
   const activeAiJob = useMemo(
     () =>
@@ -347,6 +359,7 @@ export default function DashboardPage() {
     setTestCreationMode(null);
     setViewingTestCase(null);
     setEditingDraft(null);
+    setViewingAutomationRunId(null);
   }, []);
 
   // View test case detail
@@ -397,6 +410,7 @@ export default function DashboardPage() {
     setEditingDraft(null);
     setSelectedTestIds(new Set());
     setExecutionViewRunId(null);
+    setViewingAutomationRunId(null);
   }, [setCurrentProject]);
 
   // Test case handlers
@@ -616,6 +630,41 @@ export default function DashboardPage() {
     const testsToRun = testCases.filter((tc) => testCaseIdSet.has(tc.id));
     startExecutionRun(testsToRun, state.settings.parallelLimit);
   }, [startExecutionRun, state.settings.parallelLimit, testCases]);
+
+  // Automation handlers
+  const handleRerunAutomation = useCallback(async (run: AutomationRun) => {
+    if (!currentProject) return;
+    try {
+      const response = await fetch('/api/automations/rerun', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          automationRunId: run.id,
+          projectId: currentProject.id,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        console.error('Rerun failed:', err?.error || response.statusText);
+        return;
+      }
+      // Reload state to pick up the new run
+      const stateResponse = await fetch('/api/state', { method: 'GET' });
+      if (stateResponse.ok) {
+        const payload = await stateResponse.json();
+        if (payload?.state) {
+          dispatch({ type: 'LOAD_STATE', payload: payload.state as QAState });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to rerun automation:', error);
+    }
+  }, [currentProject, dispatch]);
+
+  const handleDeleteAutomationRun = useCallback((run: AutomationRun) => {
+    if (!currentProject) return;
+    deleteAutomationRun(run.id, currentProject.id);
+  }, [currentProject, deleteAutomationRun]);
 
   // Clear all data
   const handleClearData = useCallback(() => {
@@ -1093,6 +1142,38 @@ export default function DashboardPage() {
           </div>
         );
 
+      case 'automations':
+        if (!currentProject) return renderNoProject();
+
+        if (viewingAutomationRunId) {
+          const autoRun = automationRuns.find((r) => r.id === viewingAutomationRunId);
+          if (autoRun) {
+            return (
+              <AutomationDetail
+                automationRun={autoRun}
+                testRuns={testRuns}
+                testCases={testCases}
+                testGroups={testGroups}
+                userAccounts={userAccounts}
+                projectUrl={currentProject.websiteUrl}
+                aiModel={state.settings.aiModel}
+                onBack={() => setViewingAutomationRunId(null)}
+                onRerun={() => handleRerunAutomation(autoRun)}
+              />
+            );
+          }
+        }
+
+        return (
+          <AutomationsPanel
+            automationRuns={automationRuns}
+            onViewDetail={(runId) => setViewingAutomationRunId(runId)}
+            onRerun={handleRerunAutomation}
+            onDelete={handleDeleteAutomationRun}
+            onOpenSettings={() => setActiveTab('settings')}
+          />
+        );
+
       case 'settings':
         return (
           <div className="space-y-4">
@@ -1102,6 +1183,14 @@ export default function DashboardPage() {
                 Configure integrations and test execution settings
               </p>
             </div>
+
+            {canManageSettings && (
+              <AutomationSettingsCard
+                settings={state.automationSettings}
+                projects={state.projects}
+                onSettingsChange={updateAutomationSettings}
+              />
+            )}
 
             <LinearSettingsCard />
 

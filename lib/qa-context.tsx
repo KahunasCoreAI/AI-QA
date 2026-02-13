@@ -6,6 +6,8 @@ import type {
   QAAction,
   AiDraftNotification,
   AiGenerationJob,
+  AutomationRun,
+  AutomationSettings,
   GeneratedTestDraft,
   Project,
   TestCase,
@@ -37,6 +39,14 @@ const defaultSettings: QASettings = {
   draftUserAccounts: true,
 };
 
+const defaultAutomationSettings: AutomationSettings = {
+  enabled: false,
+  targetProjectId: null,
+  testCount: 5,
+  allowedGitHubUsernames: [],
+  branchPatterns: [],
+};
+
 const initialState: QAState = {
   projects: [],
   currentProjectId: null,
@@ -47,6 +57,8 @@ const initialState: QAState = {
   aiGenerationJobs: {},
   aiDrafts: {},
   aiDraftNotifications: {},
+  automationRuns: {},
+  automationSettings: defaultAutomationSettings,
   settings: defaultSettings,
   activeTestRuns: {},
   lastUpdated: null,
@@ -208,6 +220,7 @@ function reducer(state: QAState, action: QAAction): QAState {
           ...state.aiDraftNotifications,
           [action.payload.id]: { hasUnseenDrafts: false },
         },
+        automationRuns: { ...state.automationRuns, [action.payload.id]: [] },
         lastUpdated: Date.now(),
       };
 
@@ -228,6 +241,7 @@ function reducer(state: QAState, action: QAAction): QAState {
       const { [action.payload]: removedJobs, ...remainingJobs } = state.aiGenerationJobs;
       const { [action.payload]: removedDrafts, ...remainingDrafts } = state.aiDrafts;
       const { [action.payload]: removedDraftNotifications, ...remainingDraftNotifications } = state.aiDraftNotifications;
+      const { [action.payload]: removedAutoRuns, ...remainingAutoRuns } = state.automationRuns;
       void removedTests;
       void removedRuns;
       void removedGroups;
@@ -235,6 +249,7 @@ function reducer(state: QAState, action: QAAction): QAState {
       void removedJobs;
       void removedDrafts;
       void removedDraftNotifications;
+      void removedAutoRuns;
       return {
         ...state,
         projects: state.projects.filter((p) => p.id !== action.payload),
@@ -245,6 +260,7 @@ function reducer(state: QAState, action: QAAction): QAState {
         aiGenerationJobs: remainingJobs,
         aiDrafts: remainingDrafts,
         aiDraftNotifications: remainingDraftNotifications,
+        automationRuns: remainingAutoRuns,
         currentProjectId: state.currentProjectId === action.payload ? null : state.currentProjectId,
         lastUpdated: Date.now(),
       };
@@ -906,6 +922,56 @@ function reducer(state: QAState, action: QAAction): QAState {
       };
     }
 
+    case 'CREATE_AUTOMATION_RUN': {
+      const projectId = action.payload.projectId;
+      const existing = state.automationRuns[projectId] || [];
+      return {
+        ...state,
+        automationRuns: {
+          ...state.automationRuns,
+          [projectId]: [action.payload, ...existing].slice(0, 50),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'UPDATE_AUTOMATION_RUN': {
+      const { id, projectId, updates } = action.payload;
+      const runs = state.automationRuns[projectId] || [];
+      return {
+        ...state,
+        automationRuns: {
+          ...state.automationRuns,
+          [projectId]: runs.map((r) => r.id === id ? { ...r, ...updates } : r),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'DELETE_AUTOMATION_RUN': {
+      const { id, projectId } = action.payload;
+      const runs = state.automationRuns[projectId] || [];
+      return {
+        ...state,
+        automationRuns: {
+          ...state.automationRuns,
+          [projectId]: runs.filter((r) => r.id !== id),
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
+    case 'UPDATE_AUTOMATION_SETTINGS': {
+      return {
+        ...state,
+        automationSettings: {
+          ...state.automationSettings,
+          ...action.payload,
+        },
+        lastUpdated: Date.now(),
+      };
+    }
+
     case 'UPDATE_SETTINGS': {
       const mergedSettings = { ...state.settings, ...action.payload };
       const parallelLimit = Math.max(1, Math.min(250, Math.floor(Number(mergedSettings.parallelLimit) || 3)));
@@ -940,6 +1006,8 @@ function reducer(state: QAState, action: QAAction): QAState {
         aiGenerationJobs: cleaned.aiGenerationJobs || {},
         aiDrafts: cleaned.aiDrafts || {},
         aiDraftNotifications: cleaned.aiDraftNotifications || {},
+        automationRuns: cleaned.automationRuns || {},
+        automationSettings: cleaned.automationSettings || defaultAutomationSettings,
         isFirstLoad: false,
       };
     }
@@ -1009,6 +1077,12 @@ interface QAContextType {
   deleteTestResult: (runId: string, projectId: string, resultId: string) => void;
   deleteTestRun: (runId: string, projectId: string) => void;
   clearTestRuns: (projectId: string) => void;
+  // Automation actions
+  createAutomationRun: (run: AutomationRun) => void;
+  updateAutomationRun: (id: string, projectId: string, updates: Partial<AutomationRun>) => void;
+  deleteAutomationRun: (id: string, projectId: string) => void;
+  updateAutomationSettings: (settings: Partial<AutomationSettings>) => void;
+  getAutomationRunsForProject: (projectId: string) => AutomationRun[];
   // Settings
   updateSettings: (settings: Partial<QASettings>) => void;
   // Helpers
@@ -1322,6 +1396,27 @@ export function QAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'CLEAR_TEST_RUNS', payload: { projectId } });
   }, []);
 
+  // Automation actions
+  const createAutomationRun = useCallback((run: AutomationRun) => {
+    dispatch({ type: 'CREATE_AUTOMATION_RUN', payload: run });
+  }, []);
+
+  const updateAutomationRun = useCallback((id: string, projectId: string, updates: Partial<AutomationRun>) => {
+    dispatch({ type: 'UPDATE_AUTOMATION_RUN', payload: { id, projectId, updates } });
+  }, []);
+
+  const deleteAutomationRun = useCallback((id: string, projectId: string) => {
+    dispatch({ type: 'DELETE_AUTOMATION_RUN', payload: { id, projectId } });
+  }, []);
+
+  const updateAutomationSettings = useCallback((settings: Partial<AutomationSettings>) => {
+    dispatch({ type: 'UPDATE_AUTOMATION_SETTINGS', payload: settings });
+  }, []);
+
+  const getAutomationRunsForProject = useCallback((projectId: string): AutomationRun[] => {
+    return state.automationRuns[projectId] || [];
+  }, [state.automationRuns]);
+
   // Settings
   const updateSettings = useCallback((settings: Partial<QASettings>) => {
     dispatch({ type: 'UPDATE_SETTINGS', payload: settings });
@@ -1370,6 +1465,11 @@ export function QAProvider({ children }: { children: ReactNode }) {
     getAiGenerationJobsForProject,
     getAiDraftsForProject,
     getAiDraftNotificationForProject,
+    createAutomationRun,
+    updateAutomationRun,
+    deleteAutomationRun,
+    updateAutomationSettings,
+    getAutomationRunsForProject,
     startTestRun,
     updateTestResult,
     completeTestRun,

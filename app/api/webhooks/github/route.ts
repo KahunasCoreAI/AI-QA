@@ -1,15 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import { generateText } from 'ai';
 import { handleRouteError } from '@/lib/server/route-utils';
-import { saveTeamState, getOrCreateTeamState } from '@/lib/server/team-state-store';
-import type { QAState, GeneratedTestDraft, AiGenerationJob } from '@/types';
+import { saveTeamState, getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
+import type { QAState, GeneratedTestDraft, AiGenerationJob, TestCase, TestRun, AutomationRun } from '@/types';
 import { generateId } from '@/lib/utils';
 import { getModel } from '@/lib/ai-client';
 import { z } from 'zod';
+import { executeTestBatch } from '@/lib/server/execute-tests';
 
-// Increase max duration for AI processing (required for webhook to complete)
-export const maxDuration = 60;
+// Increase max duration for automation execution
+export const maxDuration = 300;
 
 // Environment variables
 const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
@@ -110,20 +111,16 @@ function verifyGitHubSignature(payload: string, signatureHeader: string | null):
   const hmac = crypto.createHmac('sha256', GITHUB_WEBHOOK_SECRET);
   const digest = hmac.update(payload).digest('hex');
 
-  // Compare as hex strings first (constant-time string comparison)
-  // timingSafeEqual requires equal-length buffers, so we use a constant-time approach
   if (signature.length !== 64 || digest.length !== 64) {
     return false;
   }
 
-  // Use timing-safe comparison for the hex strings
   const sigBuf = Buffer.from(signature, 'utf8');
   const digBuf = Buffer.from(digest, 'utf8');
-  
+
   try {
     return crypto.timingSafeEqual(sigBuf, digBuf);
   } catch {
-    // If timingSafeEqual throws (shouldn't happen with equal lengths), reject
     return false;
   }
 }
@@ -166,7 +163,6 @@ async function fetchPRFiles(owner: string, repo: string, pullNumber: number): Pr
   const linkHeader = response.headers.get('Link');
   let totalCount = files.length;
 
-  // Handle pagination if there are more files
   if (linkHeader) {
     const match = linkHeader.match(/per_page=\d+>&page=(\d+)>; rel="last"/);
     if (match) {
@@ -185,7 +181,6 @@ function extractFrontendChanges(files: Array<{ filename: string; status: string;
 } {
   const frontendExtensions = ['.tsx', '.jsx', '.ts', '.js', '.css', '.scss', '.less'];
   const componentPatterns = ['/components/', '/ui/', '/pages/', '/app/', '/views/'];
-  const domainKeywords = ['auth', 'login', 'signup', 'dashboard', 'settings', 'profile', 'billing', 'payment', 'checkout', 'cart', 'user', 'admin', 'home', 'landing', 'pricing', 'contact', 'about'];
 
   const frontendFiles: string[] = [];
   const changedComponents: string[] = [];
@@ -198,7 +193,6 @@ function extractFrontendChanges(files: Array<{ filename: string; status: string;
     if (isFrontend) {
       frontendFiles.push(file.filename);
 
-      // Extract component path
       for (const pattern of componentPatterns) {
         if (file.filename.includes(pattern)) {
           const parts = file.filename.split(pattern);
@@ -211,7 +205,6 @@ function extractFrontendChanges(files: Array<{ filename: string; status: string;
         }
       }
 
-      // Extract domain from file path
       const lowerPath = file.filename.toLowerCase();
       for (const keyword of domainKeywords) {
         if (lowerPath.includes(keyword) && !domains.includes(keyword)) {
@@ -280,7 +273,6 @@ Return JSON with this exact structure:
   try {
     const { text } = await generateText({ model, system, prompt });
 
-    // Extract JSON from response
     const jsonMatch = text.match(/[\[{][\s\S]*[\]}]/);
     if (!jsonMatch) {
       throw new Error('No JSON found in AI response');
@@ -300,7 +292,6 @@ Return JSON with this exact structure:
     return validated.testCases;
   } catch (error) {
     console.error('Failed to generate test suggestions:', error);
-    // Return fallback test cases
     return [{
       title: `Verify PR #${pr.number} changes`,
       description: `Test that the changes from PR "${pr.title}" work correctly`,
@@ -318,6 +309,61 @@ const domainKeywords = [
   'list', 'search', 'filter', 'sort', 'pagination', 'upload', 'download',
 ];
 
+// AI test selection for automation - selects a mix of new + existing tests
+async function selectTestsForAutomation(
+  pr: GitHubPullRequestEvent['pull_request'],
+  existingTestCases: TestCase[],
+  newTestCaseIds: string[],
+  testCount: number
+): Promise<{ selectedExistingIds: string[]; selectedNewIds: string[] }> {
+  // Always include all new tests (generated from this PR)
+  const selectedNewIds = [...newTestCaseIds];
+  const remainingSlots = Math.max(0, testCount - selectedNewIds.length);
+
+  if (remainingSlots === 0 || existingTestCases.length === 0) {
+    return { selectedExistingIds: [], selectedNewIds: selectedNewIds.slice(0, testCount) };
+  }
+
+  // Use AI to select the most relevant existing tests
+  const model = getModel(DEFAULT_AI_MODEL);
+  const testCatalogue = existingTestCases
+    .filter((tc) => !newTestCaseIds.includes(tc.id))
+    .slice(0, 50) // Limit context
+    .map((tc) => `- [${tc.id}] ${tc.title}: ${tc.description.slice(0, 100)}`)
+    .join('\n');
+
+  if (!testCatalogue) {
+    return { selectedExistingIds: [], selectedNewIds };
+  }
+
+  try {
+    const { text } = await generateText({
+      model,
+      system: 'You select test cases most relevant to a code change. Return strict JSON only: { "selectedIds": ["id1", "id2"] }',
+      prompt: `PR #${pr.number}: ${pr.title}\n${pr.body?.slice(0, 300) || 'No description'}\n\nSelect up to ${remainingSlots} existing test cases most likely affected by this change:\n${testCatalogue}\n\nReturn JSON: { "selectedIds": [...] }`,
+    });
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const ids: string[] = Array.isArray(parsed.selectedIds) ? parsed.selectedIds : [];
+      const validIds = ids.filter((id) => existingTestCases.some((tc) => tc.id === id));
+      return { selectedExistingIds: validIds.slice(0, remainingSlots), selectedNewIds };
+    }
+  } catch (error) {
+    console.error('AI test selection failed, falling back to recent tests:', error);
+  }
+
+  // Fallback: select most recently created existing tests
+  const fallbackIds = existingTestCases
+    .filter((tc) => !newTestCaseIds.includes(tc.id))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, remainingSlots)
+    .map((tc) => tc.id);
+
+  return { selectedExistingIds: fallbackIds, selectedNewIds };
+}
+
 // Process a merged PR and create draft tests
 async function processMergedPR(
   pr: GitHubPullRequestEvent['pull_request'],
@@ -328,12 +374,10 @@ async function processMergedPR(
   draftCount: number;
   message: string;
 }> {
-  // Check for idempotency - verify this delivery hasn't been processed already
-  // We use the delivery ID to prevent duplicate processing
   console.log('[webhook:github] Step 1: Loading team state', { teamId, deliveryId });
   const state = await getOrCreateTeamState(teamId);
   console.log('[webhook:github] Step 1 complete: Team state loaded', { projectCount: state.projects.length });
-  
+
   // Check if any existing job was created from this delivery (exact match only)
   for (const projectId of Object.keys(state.aiGenerationJobs || {})) {
     const jobs = state.aiGenerationJobs[projectId] || [];
@@ -366,7 +410,6 @@ async function processMergedPR(
     };
   }
 
-  // Extract frontend changes
   const { frontendFiles, changedComponents, domains } = extractFrontendChanges(
     prFiles.files.map((f) => ({
       filename: f.filename,
@@ -404,20 +447,17 @@ async function processMergedPR(
     };
   }
 
-  // Get the team state (already fetched for idempotency check)
-  // Find a suitable project (use first project or create a placeholder)
+  // Find a suitable project
   let projectId: string;
   if (state.projects.length > 0) {
-    // Use the most recent project
     const recentProject = state.projects[state.projects.length - 1];
     projectId = recentProject.id;
   } else {
-    // Create a default project for webhook tests
     projectId = generateId();
     const newProject = {
       id: projectId,
       name: `${pr.base.repo.name} Tests`,
-      websiteUrl: pr.base.repo.html_url, // Use the repo URL as default
+      websiteUrl: pr.base.repo.html_url,
       createdAt: Date.now(),
     };
     state.projects.push(newProject);
@@ -428,6 +468,7 @@ async function processMergedPR(
     state.aiGenerationJobs[projectId] = [];
     state.aiDrafts[projectId] = [];
     state.aiDraftNotifications[projectId] = { hasUnseenDrafts: false };
+    state.automationRuns[projectId] = [];
   }
 
   // Create a job for this PR
@@ -462,12 +503,11 @@ async function processMergedPR(
     createdAt: now + index,
   }));
 
-  // Update state with job and drafts
   const existingJobs = state.aiGenerationJobs[projectId] || [];
   const existingDrafts = state.aiDrafts[projectId] || [];
   const existingNotification = state.aiDraftNotifications[projectId] || { hasUnseenDrafts: false };
 
-  const nextState: QAState = {
+  let nextState: QAState = {
     ...state,
     aiGenerationJobs: {
       ...state.aiGenerationJobs,
@@ -487,7 +527,245 @@ async function processMergedPR(
     lastUpdated: Date.now(),
   };
 
-  // Save state with system user (null userId)
+  // Check if automation is enabled and should run
+  const autoSettings = state.automationSettings;
+  if (autoSettings?.enabled) {
+    console.log('[webhook:github] Step 4a: Automation enabled, checking filters');
+
+    const targetProjectId = autoSettings.targetProjectId || projectId;
+    const prAuthor = pr.user.login;
+    const baseBranch = pr.base.ref;
+
+    // Check allowed usernames filter
+    const usernamesMatch = autoSettings.allowedGitHubUsernames.length === 0 ||
+      autoSettings.allowedGitHubUsernames.some((u) => u.toLowerCase() === prAuthor.toLowerCase());
+
+    // Check branch patterns filter
+    const branchMatch = autoSettings.branchPatterns.length === 0 ||
+      autoSettings.branchPatterns.some((pattern) => {
+        if (pattern.includes('*')) {
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          return regex.test(baseBranch);
+        }
+        return pattern === baseBranch;
+      });
+
+    if (usernamesMatch && branchMatch) {
+      console.log('[webhook:github] Step 4b: Filters passed, running automation');
+
+      // Auto-publish drafts as TestCases
+      const publishedTestCases: TestCase[] = drafts.map((draft, index) => ({
+        id: generateId() + `-auto-${index}`,
+        projectId: targetProjectId,
+        title: draft.title,
+        description: draft.description,
+        expectedOutcome: draft.expectedOutcome,
+        status: 'pending' as const,
+        createdAt: Date.now() + index,
+        userAccountId: draft.userAccountId,
+      }));
+
+      // Mark drafts as published
+      const publishedDraftIds = new Set(drafts.map((d) => d.id));
+      const updatedDrafts = (nextState.aiDrafts[projectId] || []).map((d) =>
+        publishedDraftIds.has(d.id) ? { ...d, status: 'published' as const, publishedAt: Date.now() } : d
+      );
+      nextState = {
+        ...nextState,
+        aiDrafts: { ...nextState.aiDrafts, [projectId]: updatedDrafts },
+      };
+
+      // Add test cases to state
+      const existingTestCases = nextState.testCases[targetProjectId] || [];
+      nextState = {
+        ...nextState,
+        testCases: {
+          ...nextState.testCases,
+          [targetProjectId]: [...existingTestCases, ...publishedTestCases],
+        },
+      };
+
+      // Select tests for automation (mix of new + existing)
+      const allProjectTests = nextState.testCases[targetProjectId] || [];
+      const newTestCaseIds = publishedTestCases.map((tc) => tc.id);
+      const { selectedExistingIds, selectedNewIds } = await selectTestsForAutomation(
+        pr,
+        allProjectTests,
+        newTestCaseIds,
+        autoSettings.testCount
+      );
+
+      const allSelectedIds = [...selectedNewIds, ...selectedExistingIds];
+      const testsToRun = allProjectTests.filter((tc) => allSelectedIds.includes(tc.id));
+
+      // Create AutomationRun record
+      const automationRunId = generateId();
+      const automationRun: AutomationRun = {
+        id: automationRunId,
+        projectId: targetProjectId,
+        prNumber: pr.number,
+        prTitle: pr.title,
+        prUrl: pr.html_url,
+        prAuthor: prAuthor,
+        baseBranch,
+        headBranch: pr.head.ref,
+        deliveryId,
+        selectedTestCaseIds: selectedExistingIds,
+        generatedTestCaseIds: selectedNewIds,
+        totalTests: testsToRun.length,
+        status: 'running',
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+      };
+
+      // Create TestRun record
+      const testRunId = generateId();
+      const testRun: TestRun = {
+        id: testRunId,
+        projectId: targetProjectId,
+        startedAt: Date.now(),
+        status: 'running',
+        testCaseIds: testsToRun.map((tc) => tc.id),
+        parallelLimit: state.settings.parallelLimit,
+        totalTests: testsToRun.length,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        results: [],
+      };
+
+      automationRun.testRunId = testRunId;
+
+      // Save state with automation run and test run
+      const existingAutoRuns = nextState.automationRuns?.[targetProjectId] || [];
+      const existingTestRuns = nextState.testRuns[targetProjectId] || [];
+      nextState = {
+        ...nextState,
+        automationRuns: {
+          ...(nextState.automationRuns || {}),
+          [targetProjectId]: [automationRun, ...existingAutoRuns].slice(0, 50),
+        },
+        testRuns: {
+          ...nextState.testRuns,
+          [targetProjectId]: [testRun, ...existingTestRuns].slice(0, 50),
+        },
+        lastUpdated: Date.now(),
+      };
+
+      // Save state before execution
+      await saveTeamState(teamId, null, nextState);
+      console.log('[webhook:github] Step 4c: Saved state, starting test execution');
+
+      // Execute tests headlessly
+      try {
+        const providerKeys = await getTeamProviderKeys(teamId);
+        const project = nextState.projects.find((p) => p.id === targetProjectId);
+        const websiteUrl = project?.websiteUrl || pr.base.repo.html_url;
+
+        const batchResult = await executeTestBatch({
+          testCases: testsToRun,
+          websiteUrl,
+          aiModel: DEFAULT_AI_MODEL,
+          settings: nextState.settings,
+          parallelLimit: nextState.settings.parallelLimit,
+          persistedState: nextState,
+          providerKeys: {
+            hyperbrowser: providerKeys.hyperbrowser || undefined,
+            browserUseCloud: providerKeys.browserUseCloud || undefined,
+          },
+        });
+
+        // Update automation run with results
+        const completedAutoRun: Partial<AutomationRun> = {
+          status: 'completed',
+          completedAt: Date.now(),
+          passed: batchResult.passed,
+          failed: batchResult.failed,
+          skipped: batchResult.skipped,
+        };
+
+        // Update test run with results
+        const completedTestRun: Partial<TestRun> = {
+          status: 'completed',
+          completedAt: Date.now(),
+          results: batchResult.results,
+          passed: batchResult.passed,
+          failed: batchResult.failed,
+          skipped: batchResult.skipped,
+        };
+
+        // Reload and update state
+        const freshState = await getOrCreateTeamState(teamId);
+        const autoRuns = freshState.automationRuns?.[targetProjectId] || [];
+        const testRuns = freshState.testRuns[targetProjectId] || [];
+
+        const finalState: QAState = {
+          ...freshState,
+          automationRuns: {
+            ...(freshState.automationRuns || {}),
+            [targetProjectId]: autoRuns.map((r) =>
+              r.id === automationRunId ? { ...r, ...completedAutoRun } : r
+            ),
+          },
+          testRuns: {
+            ...freshState.testRuns,
+            [targetProjectId]: testRuns.map((r) =>
+              r.id === testRunId ? { ...r, ...completedTestRun } : r
+            ),
+          },
+          lastUpdated: Date.now(),
+        };
+
+        await saveTeamState(teamId, null, finalState);
+        console.log('[webhook:github] Step 4d: Automation complete', {
+          passed: batchResult.passed,
+          failed: batchResult.failed,
+          skipped: batchResult.skipped,
+        });
+      } catch (execError) {
+        console.error('[webhook:github] Automation execution failed:', execError);
+
+        // Update automation run as failed
+        const freshState = await getOrCreateTeamState(teamId);
+        const autoRuns = freshState.automationRuns?.[targetProjectId] || [];
+        const testRuns = freshState.testRuns[targetProjectId] || [];
+
+        const failedState: QAState = {
+          ...freshState,
+          automationRuns: {
+            ...(freshState.automationRuns || {}),
+            [targetProjectId]: autoRuns.map((r) =>
+              r.id === automationRunId
+                ? { ...r, status: 'failed' as const, completedAt: Date.now(), error: execError instanceof Error ? execError.message : 'Unknown error' }
+                : r
+            ),
+          },
+          testRuns: {
+            ...freshState.testRuns,
+            [targetProjectId]: testRuns.map((r) =>
+              r.id === testRunId ? { ...r, status: 'failed' as const, completedAt: Date.now() } : r
+            ),
+          },
+          lastUpdated: Date.now(),
+        };
+
+        await saveTeamState(teamId, null, failedState);
+      }
+
+      return {
+        success: true,
+        draftCount: drafts.length,
+        message: `Created ${drafts.length} tests and started automation for PR #${pr.number}`,
+      };
+    } else {
+      console.log('[webhook:github] Step 4a: Automation filters did not match', { usernamesMatch, branchMatch, prAuthor, baseBranch });
+    }
+  }
+
+  // Save state (draft-only path or automation filters didn't match)
   console.log('[webhook:github] Step 4: Saving state', { projectId, jobId, draftCount: drafts.length });
   await saveTeamState(teamId, null, nextState);
   console.log('[webhook:github] Step 4 complete: State saved');
@@ -506,10 +784,8 @@ export async function POST(request: NextRequest) {
     const event = request.headers.get('x-github-event');
     const delivery = request.headers.get('x-github-delivery');
 
-    // Get raw body for signature verification
     const rawBody = await request.text();
 
-    // Verify signature
     if (!verifyGitHubSignature(rawBody, signature)) {
       console.log('[webhook:github] Invalid signature', { event, delivery });
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
@@ -530,7 +806,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Parse and validate the webhook payload
     let payload: unknown;
     try {
       payload = JSON.parse(rawBody);
@@ -557,34 +832,38 @@ export async function POST(request: NextRequest) {
 
     const teamId = SHARED_TEAM_ID;
     const prNumber = prEvent.pull_request.number;
+    const deliveryId = delivery || `gh-${prNumber}`;
 
     console.log('[webhook:github] Processing merged PR', {
-      delivery,
+      delivery: deliveryId,
       prNumber,
       title: prEvent.pull_request.title,
       repo: prEvent.repository.full_name,
     });
 
-    // Process the merged PR synchronously to ensure completion on Vercel serverless.
-    // GitHub may retry on timeout; the idempotency check handles duplicates.
-    const result = await processMergedPR(prEvent.pull_request, teamId, delivery || `gh-${prNumber}`);
-
-    console.log('[webhook:github] Processing complete', {
-      delivery,
-      prNumber,
-      success: result.success,
-      draftCount: result.draftCount,
+    // Use after() for background processing - return 202 immediately
+    after(async () => {
+      try {
+        const result = await processMergedPR(prEvent.pull_request, teamId, deliveryId);
+        console.log('[webhook:github] Processing complete', {
+          delivery: deliveryId,
+          prNumber,
+          success: result.success,
+          draftCount: result.draftCount,
+        });
+      } catch (error) {
+        console.error('[webhook:github] Background processing failed:', error);
+      }
     });
 
     return NextResponse.json(
       {
-        message: result.message,
-        success: result.success,
-        draftCount: result.draftCount,
+        message: 'Processing PR in background',
+        accepted: true,
         prNumber,
         prTitle: prEvent.pull_request.title,
       },
-      { status: 200 }
+      { status: 202 }
     );
   } catch (error) {
     console.error('Webhook processing error:', error);
@@ -595,8 +874,8 @@ export async function POST(request: NextRequest) {
 // Handle GET requests (health check)
 export async function GET() {
   return NextResponse.json(
-    { 
-      status: 'ok', 
+    {
+      status: 'ok',
       message: 'GitHub webhook endpoint active',
       events: ['ping', 'pull_request (merged only)'],
     },
