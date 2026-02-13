@@ -578,9 +578,27 @@ function reducer(state: QAState, action: QAAction): QAState {
     }
 
     case 'COMPLETE_TEST_RUN': {
-      const targetRun = state.activeTestRuns[action.payload.runId];
+      let targetRun = state.activeTestRuns[action.payload.runId];
+
+      // Fallback: if activeTestRuns lost this run (e.g. LOAD_STATE race), reconstruct
       if (!targetRun) {
-        return state;
+        const { projectId, testCaseIds, finalResults } = action.payload;
+        if (!projectId || !finalResults) {
+          return state;
+        }
+        targetRun = {
+          id: action.payload.runId,
+          projectId,
+          startedAt: Date.now(),
+          status: 'running',
+          testCaseIds: testCaseIds || finalResults.map((r) => r.testCaseId),
+          parallelLimit: 1,
+          totalTests: finalResults.length,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          results: finalResults,
+        };
       }
 
       // Use finalResults if provided (avoids timing issues), otherwise fall back to state
@@ -998,9 +1016,22 @@ function reducer(state: QAState, action: QAAction): QAState {
         ...cleaned.activeTestRuns,
         ...state.activeTestRuns,  // Local runs take precedence
       };
+
+      // Merge testRuns: combine server and local, dedup by run ID (local takes precedence)
+      const mergedTestRuns: Record<string, TestRun[]> = { ...cleaned.testRuns };
+      for (const [projectId, localRuns] of Object.entries(state.testRuns)) {
+        const serverRuns = mergedTestRuns[projectId] || [];
+        const serverRunIds = new Set(serverRuns.map((r) => r.id));
+        const uniqueLocalRuns = localRuns.filter((r) => !serverRunIds.has(r.id));
+        if (uniqueLocalRuns.length > 0) {
+          mergedTestRuns[projectId] = [...uniqueLocalRuns, ...serverRuns].slice(0, 50);
+        }
+      }
+
       return {
         ...cleaned,
         activeTestRuns: mergedActiveRuns,
+        testRuns: mergedTestRuns,
         testGroups: cleaned.testGroups || {},
         userAccounts: cleaned.userAccounts || {},
         aiGenerationJobs: cleaned.aiGenerationJobs || {},
@@ -1067,7 +1098,7 @@ interface QAContextType {
   // Test run actions
   startTestRun: (projectId: string, testCaseIds: string[], parallelLimit: number) => TestRun;
   updateTestResult: (runId: string, result: TestResult) => void;
-  completeTestRun: (runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => void;
+  completeTestRun: (runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[], projectId?: string, testCaseIds?: string[]) => void;
   patchTestResult: (
     runId: string,
     projectId: string,
@@ -1371,8 +1402,8 @@ export function QAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'UPDATE_TEST_RESULT', payload: { runId, result } });
   }, []);
 
-  const completeTestRun = useCallback((runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[]) => {
-    dispatch({ type: 'COMPLETE_TEST_RUN', payload: { runId, status, finalResults } });
+  const completeTestRun = useCallback((runId: string, status: 'completed' | 'failed' | 'cancelled', finalResults?: TestResult[], projectId?: string, testCaseIds?: string[]) => {
+    dispatch({ type: 'COMPLETE_TEST_RUN', payload: { runId, status, finalResults, projectId, testCaseIds } });
   }, []);
 
   const patchTestResult = useCallback((

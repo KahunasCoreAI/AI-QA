@@ -335,7 +335,7 @@ export type QAAction =
         updates: Partial<Pick<TestResult, 'linearIssueId' | 'linearIssueIdentifier' | 'linearIssueUrl' | 'linearCreatedAt'>>;
       };
     }
-  | { type: 'COMPLETE_TEST_RUN'; payload: { runId: string; status: 'completed' | 'failed' | 'cancelled'; finalResults?: TestResult[] } }
+  | { type: 'COMPLETE_TEST_RUN'; payload: { runId: string; status: 'completed' | 'failed' | 'cancelled'; finalResults?: TestResult[]; projectId?: string; testCaseIds?: string[] } }
   | { type: 'DELETE_TEST_RESULT'; payload: { runId: string; projectId: string; resultId: string } }
   | { type: 'DELETE_TEST_RUN'; payload: { runId: string; projectId: string } }
   | { type: 'CLEAR_TEST_RUNS'; payload: { projectId: string } }

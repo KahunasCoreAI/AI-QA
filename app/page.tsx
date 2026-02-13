@@ -182,6 +182,9 @@ export default function DashboardPage() {
   // Track synced results to avoid infinite loops
   const syncedResultsRef = useRef<Map<string, string>>(new Map());
 
+  // Track run metadata so it's available at completion even if activeTestRuns is cleared
+  const runMetadataRef = useRef<Map<string, { projectId: string; testCaseIds: string[] }>>(new Map());
+
   // Test execution hook
   const {
     runStates,
@@ -191,7 +194,9 @@ export default function DashboardPage() {
     skipTest,
   } = useTestExecution((runId, finalResults, status) => {
     const finalStatus = status === 'cancelled' ? 'cancelled' : status === 'error' ? 'failed' : 'completed';
-    completeTestRun(runId, finalStatus, Array.from(finalResults.values()));
+    const metadata = runMetadataRef.current.get(runId);
+    completeTestRun(runId, finalStatus, Array.from(finalResults.values()), metadata?.projectId, metadata?.testCaseIds);
+    runMetadataRef.current.delete(runId);
   });
 
   // Update test results in context as they come in (only sync changed results)
@@ -422,10 +427,32 @@ export default function DashboardPage() {
     } else {
       createTestCase(currentProject.id, testCase.title, testCase.description, testCase.expectedOutcome, testCase.userAccountId);
     }
+
+    // If saving from a draft editor, mark the draft as published
+    if (editingDraft) {
+      const projectId = currentProject.id;
+      const draftId = editingDraft.id;
+
+      // Update local state: mark draft as published so it disappears from the drafts list
+      const currentDrafts = getAiDraftsForProject(projectId);
+      const updatedDrafts = currentDrafts.map((d) =>
+        d.id === draftId ? { ...d, status: 'published' as const, publishedAt: Date.now() } : d
+      );
+      const currentJobs = getAiGenerationJobsForProject(projectId);
+      syncAiGenerationProjectState(projectId, currentJobs, updatedDrafts);
+
+      // Persist to server: discard endpoint removes non-draft entries from persisted state
+      void fetch('/api/generate-tests/discard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, draftIds: [draftId] }),
+      }).catch(() => { /* best-effort */ });
+    }
+
     setTestCreationMode(null);
     setEditingTestCase(undefined);
     setEditingDraft(null);
-  }, [currentProject, editingTestCase, createTestCase, updateTestCase]);
+  }, [currentProject, editingTestCase, editingDraft, createTestCase, updateTestCase, getAiDraftsForProject, getAiGenerationJobsForProject, syncAiGenerationProjectState]);
 
   const handleEditTestCase = useCallback((testCase: TestCase) => {
     setEditingTestCase(testCase);
@@ -597,7 +624,12 @@ export default function DashboardPage() {
     if (!currentProject || testsToRun.length === 0) return;
 
     const safeParallelLimit = Math.max(1, Math.min(250, parallelLimit));
-    const run = startTestRun(currentProject.id, testsToRun.map((tc) => tc.id), safeParallelLimit);
+    const testCaseIds = testsToRun.map((tc) => tc.id);
+    const run = startTestRun(currentProject.id, testCaseIds, safeParallelLimit);
+
+    // Store metadata for completion callback fallback
+    runMetadataRef.current.set(run.id, { projectId: currentProject.id, testCaseIds });
+
     setExecutionViewRunId(run.id);
     setActiveTab('execution');
 
