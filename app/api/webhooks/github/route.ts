@@ -500,17 +500,19 @@ export async function POST(request: NextRequest) {
 
     // Verify signature
     if (!verifyGitHubSignature(rawBody, signature)) {
-      console.error('Invalid webhook signature', { event, delivery });
+      console.log('[webhook:github] Invalid signature', { event, delivery });
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
     }
 
     // Handle ping event
     if (event === 'ping') {
+      console.log('[webhook:github] Ping received', { delivery });
       return NextResponse.json({ message: 'Pong' }, { status: 200 });
     }
 
     // Only process pull_request events
     if (event !== 'pull_request') {
+      console.log('[webhook:github] Ignored event type', { event, delivery });
       return NextResponse.json(
         { message: `Event '${event}' not supported` },
         { status: 200 }
@@ -527,7 +529,7 @@ export async function POST(request: NextRequest) {
 
     const parseResult = pullRequestSchema.safeParse(payload);
     if (!parseResult.success) {
-      console.error('Invalid webhook payload:', parseResult.error);
+      console.log('[webhook:github] Invalid payload', { delivery, errors: parseResult.error.flatten() });
       return NextResponse.json({ error: 'Invalid payload format' }, { status: 400 });
     }
 
@@ -535,42 +537,43 @@ export async function POST(request: NextRequest) {
 
     // Only process merged pull requests
     if (prEvent.action !== 'closed' || !prEvent.pull_request.merged) {
+      console.log('[webhook:github] PR not merged', { delivery, action: prEvent.action, merged: prEvent.pull_request.merged, prNumber: prEvent.number });
       return NextResponse.json(
         { message: `PR action '${prEvent.action}' not processed (only merged PRs)` },
         { status: 200 }
       );
     }
 
-    console.log('Processing merged PR:', {
-      number: prEvent.pull_request.number,
-      title: prEvent.pull_request.title,
-      repo: prEvent.repository.full_name,
-      deliveryId: delivery,
-    });
-
-    // Process the merged PR 
-    // Note: We await here to ensure the processing completes on serverless environments
-    // In production, you might want to use a queue/background job for long-running processing
     const teamId = SHARED_TEAM_ID;
     const prNumber = prEvent.pull_request.number;
-    
-    // Process in background but don't block - handle errors within
-    (async () => {
-      try {
-        const result = await processMergedPR(prEvent.pull_request, teamId, delivery || `gh-${prNumber}`);
-        console.log('PR processing result:', result);
-      } catch (error) {
-        console.error('Failed to process merged PR:', error);
-      }
-    })();
+
+    console.log('[webhook:github] Processing merged PR', {
+      delivery,
+      prNumber,
+      title: prEvent.pull_request.title,
+      repo: prEvent.repository.full_name,
+    });
+
+    // Process the merged PR synchronously to ensure completion on Vercel serverless.
+    // GitHub may retry on timeout; the idempotency check handles duplicates.
+    const result = await processMergedPR(prEvent.pull_request, teamId, delivery || `gh-${prNumber}`);
+
+    console.log('[webhook:github] Processing complete', {
+      delivery,
+      prNumber,
+      success: result.success,
+      draftCount: result.draftCount,
+    });
 
     return NextResponse.json(
-      { 
-        message: `PR #${prEvent.pull_request.number} accepted for processing`,
-        prNumber: prEvent.pull_request.number,
+      {
+        message: result.message,
+        success: result.success,
+        draftCount: result.draftCount,
+        prNumber,
         prTitle: prEvent.pull_request.title,
       },
-      { status: 202 }
+      { status: 200 }
     );
   } catch (error) {
     console.error('Webhook processing error:', error);
