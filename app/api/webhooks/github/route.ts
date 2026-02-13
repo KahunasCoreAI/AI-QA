@@ -9,14 +9,15 @@ import { getModel } from '@/lib/ai-client';
 import { z } from 'zod';
 import { executeTestBatch } from '@/lib/server/execute-tests';
 
-// Increase max duration for automation execution
-export const maxDuration = 300;
+// Increase max duration for automation execution + delay window
+export const maxDuration = 900;
 
 // Environment variables
 const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const SHARED_TEAM_ID = process.env.SHARED_TEAM_ID || 'team-default';
 const DEFAULT_AI_MODEL = process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'openai/gpt-5.2';
+const AUTOMATION_DELAY_MS = 10 * 60 * 1000;
 
 // Zod schemas for webhook payload validation
 export const githubPingEventSchema = z.object({
@@ -123,6 +124,10 @@ function verifyGitHubSignature(payload: string, signatureHeader: string | null):
   } catch {
     return false;
   }
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 // Fetch changed files from a pull request using GitHub API
@@ -682,8 +687,9 @@ async function processMergedPR(
       const allSelectedIds = [...selectedNewIds, ...selectedExistingIds];
       const testsToRun = allProjectTests.filter((tc) => allSelectedIds.includes(tc.id));
 
-      // Create AutomationRun record
+      // Create AutomationRun record (pending until delay window elapses)
       const automationRunId = generateId();
+      const scheduledFor = Date.now() + AUTOMATION_DELAY_MS;
       const automationRun: AutomationRun = {
         id: automationRunId,
         projectId: targetProjectId,
@@ -697,66 +703,138 @@ async function processMergedPR(
         selectedTestCaseIds: selectedExistingIds,
         generatedTestCaseIds: selectedNewIds,
         totalTests: testsToRun.length,
-        status: 'running',
+        status: 'pending',
         createdAt: Date.now(),
-        startedAt: Date.now(),
+        scheduledFor,
+        delayMs: AUTOMATION_DELAY_MS,
         passed: 0,
         failed: 0,
         skipped: 0,
         selectionReason,
       };
 
-      // Create TestRun record
-      const testRunId = generateId();
-      const testRun: TestRun = {
-        id: testRunId,
-        projectId: targetProjectId,
-        startedAt: Date.now(),
-        status: 'running',
-        testCaseIds: testsToRun.map((tc) => tc.id),
-        parallelLimit: state.settings.parallelLimit,
-        totalTests: testsToRun.length,
-        passed: 0,
-        failed: 0,
-        skipped: 0,
-        results: [],
-      };
-
-      automationRun.testRunId = testRunId;
-
-      // Save state with automation run and test run
+      // Save state with automation run (delay before execution)
       const existingAutoRuns = nextState.automationRuns?.[targetProjectId] || [];
-      const existingTestRuns = nextState.testRuns[targetProjectId] || [];
       nextState = {
         ...nextState,
         automationRuns: {
           ...(nextState.automationRuns || {}),
           [targetProjectId]: [automationRun, ...existingAutoRuns].slice(0, 50),
         },
-        testRuns: {
-          ...nextState.testRuns,
-          [targetProjectId]: [testRun, ...existingTestRuns].slice(0, 50),
-        },
         lastUpdated: Date.now(),
       };
 
-      // Save state before execution
       await saveTeamState(teamId, null, nextState);
-      console.log('[webhook:github] Step 4c: Saved state, starting test execution');
+      console.log('[webhook:github] Step 4c: Saved state, delaying automation execution', { delayMs: AUTOMATION_DELAY_MS });
 
-      // Execute tests headlessly
+      let testRunId: string | null = null;
+
+      // Execute tests headlessly after delay
       try {
+        await wait(AUTOMATION_DELAY_MS);
+
+        const freshState = await getOrCreateTeamState(teamId);
+        const autoRuns = freshState.automationRuns?.[targetProjectId] || [];
+        const pendingRun = autoRuns.find((r) => r.id === automationRunId);
+
+        if (!pendingRun) {
+          console.log('[webhook:github] Automation run missing after delay', { automationRunId, targetProjectId });
+          return {
+            success: false,
+            draftCount: drafts.length,
+            message: `Automation run ${automationRunId} missing after delay`,
+          };
+        }
+
+        if (pendingRun.status !== 'pending') {
+          console.log('[webhook:github] Automation run no longer pending after delay', { automationRunId, status: pendingRun.status });
+          return {
+            success: true,
+            draftCount: drafts.length,
+            message: `Automation run ${automationRunId} already ${pendingRun.status}`,
+          };
+        }
+
+        const allSelectedIdsAfterDelay = [...pendingRun.generatedTestCaseIds, ...pendingRun.selectedTestCaseIds];
+        const allProjectTestsAfterDelay = freshState.testCases[targetProjectId] || [];
+        const testsToRunAfterDelay = allProjectTestsAfterDelay.filter((tc) => allSelectedIdsAfterDelay.includes(tc.id));
+
+        if (testsToRunAfterDelay.length === 0) {
+          const failedState: QAState = {
+            ...freshState,
+            automationRuns: {
+              ...(freshState.automationRuns || {}),
+              [targetProjectId]: autoRuns.map((r) =>
+                r.id === automationRunId
+                  ? { ...r, status: 'failed' as const, completedAt: Date.now(), error: 'No test cases available after delay' }
+                  : r
+              ),
+            },
+            lastUpdated: Date.now(),
+          };
+
+          await saveTeamState(teamId, null, failedState);
+
+          return {
+            success: false,
+            draftCount: drafts.length,
+            message: `No test cases available after delay for automation run ${automationRunId}`,
+          };
+        }
+
+        testRunId = generateId();
+        const runStartedAt = Date.now();
+        const testRun: TestRun = {
+          id: testRunId,
+          projectId: targetProjectId,
+          startedAt: runStartedAt,
+          status: 'running',
+          testCaseIds: testsToRunAfterDelay.map((tc) => tc.id),
+          parallelLimit: freshState.settings.parallelLimit,
+          totalTests: testsToRunAfterDelay.length,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          results: [],
+        };
+
+        const runningState: QAState = {
+          ...freshState,
+          automationRuns: {
+            ...(freshState.automationRuns || {}),
+            [targetProjectId]: autoRuns.map((r) =>
+              r.id === automationRunId
+                ? {
+                    ...r,
+                    status: 'running' as const,
+                    startedAt: runStartedAt,
+                    testRunId,
+                    totalTests: testsToRunAfterDelay.length,
+                  }
+                : r
+            ),
+          },
+          testRuns: {
+            ...freshState.testRuns,
+            [targetProjectId]: [testRun, ...(freshState.testRuns[targetProjectId] || [])].slice(0, 50),
+          },
+          lastUpdated: Date.now(),
+        };
+
+        await saveTeamState(teamId, null, runningState);
+        console.log('[webhook:github] Step 4d: Delay complete, starting test execution');
+
         const providerKeys = await getTeamProviderKeys(teamId);
-        const project = nextState.projects.find((p) => p.id === targetProjectId);
+        const project = runningState.projects.find((p) => p.id === targetProjectId);
         const websiteUrl = project?.websiteUrl || pr.base.repo.html_url;
 
         const batchResult = await executeTestBatch({
-          testCases: testsToRun,
+          testCases: testsToRunAfterDelay,
           websiteUrl,
           aiModel: DEFAULT_AI_MODEL,
-          settings: nextState.settings,
-          parallelLimit: nextState.settings.parallelLimit,
-          persistedState: nextState,
+          settings: runningState.settings,
+          parallelLimit: runningState.settings.parallelLimit,
+          persistedState: runningState,
           providerKeys: {
             hyperbrowser: providerKeys.hyperbrowser || undefined,
             browserUseCloud: providerKeys.browserUseCloud || undefined,
@@ -783,29 +861,29 @@ async function processMergedPR(
         };
 
         // Reload and update state
-        const freshState = await getOrCreateTeamState(teamId);
-        const autoRuns = freshState.automationRuns?.[targetProjectId] || [];
-        const testRuns = freshState.testRuns[targetProjectId] || [];
+        const finalState = await getOrCreateTeamState(teamId);
+        const finalAutoRuns = finalState.automationRuns?.[targetProjectId] || [];
+        const finalTestRuns = finalState.testRuns[targetProjectId] || [];
 
-        const finalState: QAState = {
-          ...freshState,
+        const completedState: QAState = {
+          ...finalState,
           automationRuns: {
-            ...(freshState.automationRuns || {}),
-            [targetProjectId]: autoRuns.map((r) =>
+            ...(finalState.automationRuns || {}),
+            [targetProjectId]: finalAutoRuns.map((r) =>
               r.id === automationRunId ? { ...r, ...completedAutoRun } : r
             ),
           },
           testRuns: {
-            ...freshState.testRuns,
-            [targetProjectId]: testRuns.map((r) =>
+            ...finalState.testRuns,
+            [targetProjectId]: finalTestRuns.map((r) =>
               r.id === testRunId ? { ...r, ...completedTestRun } : r
             ),
           },
           lastUpdated: Date.now(),
         };
 
-        await saveTeamState(teamId, null, finalState);
-        console.log('[webhook:github] Step 4d: Automation complete', {
+        await saveTeamState(teamId, null, completedState);
+        console.log('[webhook:github] Step 4e: Automation complete', {
           passed: batchResult.passed,
           failed: batchResult.failed,
           skipped: batchResult.skipped,
@@ -813,7 +891,6 @@ async function processMergedPR(
       } catch (execError) {
         console.error('[webhook:github] Automation execution failed:', execError);
 
-        // Update automation run as failed
         const freshState = await getOrCreateTeamState(teamId);
         const autoRuns = freshState.automationRuns?.[targetProjectId] || [];
         const testRuns = freshState.testRuns[targetProjectId] || [];
@@ -830,9 +907,11 @@ async function processMergedPR(
           },
           testRuns: {
             ...freshState.testRuns,
-            [targetProjectId]: testRuns.map((r) =>
-              r.id === testRunId ? { ...r, status: 'failed' as const, completedAt: Date.now() } : r
-            ),
+            [targetProjectId]: testRunId
+              ? testRuns.map((r) =>
+                  r.id === testRunId ? { ...r, status: 'failed' as const, completedAt: Date.now() } : r
+                )
+              : testRuns,
           },
           lastUpdated: Date.now(),
         };
@@ -843,7 +922,7 @@ async function processMergedPR(
       return {
         success: true,
         draftCount: drafts.length,
-        message: `Created ${drafts.length} tests and started automation for PR #${pr.number}`,
+        message: `Created ${drafts.length} tests and scheduled automation for PR #${pr.number}`,
       };
     } else {
       console.log('[webhook:github] Step 4a: Automation filters did not match', { usernamesMatch, branchMatch, prAuthor, baseBranch });

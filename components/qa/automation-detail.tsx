@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { ArrowLeft, ExternalLink, Play, CheckCircle2, XCircle, Clock, GitPullRequest, Sparkles } from 'lucide-react';
 import { TestResultsTable } from './test-results-table';
 import type { AutomationRun, TestCase, TestRun, TestGroup, UserAccount } from '@/types';
-import { formatRelativeTime, formatDuration } from '@/lib/utils';
+import { formatDelay, formatRelativeTime, formatDuration } from '@/lib/utils';
 
 interface AutomationDetailProps {
   automationRun: AutomationRun;
@@ -21,8 +21,8 @@ interface AutomationDetailProps {
   onRerun: () => void;
 }
 
-const getStatusBadge = (status: AutomationRun['status']) => {
-  switch (status) {
+const getStatusBadge = (run: AutomationRun) => {
+  switch (run.status) {
     case 'completed':
       return <Badge className="bg-[#30a46c]/8 text-[#30a46c] border-[#30a46c]/15 text-[11px] font-medium px-1.5 py-0">Completed</Badge>;
     case 'failed':
@@ -32,9 +32,12 @@ const getStatusBadge = (status: AutomationRun['status']) => {
     case 'selecting_tests':
       return <Badge className="bg-[#6e56cf]/8 text-[#6e56cf] border-[#6e56cf]/15 text-[11px] font-medium px-1.5 py-0">Selecting Tests</Badge>;
     case 'pending':
+      if (run.delayMs) {
+        return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">Delayed {formatDelay(run.delayMs)}</Badge>;
+      }
       return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">Pending</Badge>;
     default:
-      return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">{status}</Badge>;
+      return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">{run.status}</Badge>;
   }
 };
 
@@ -62,6 +65,14 @@ export function AutomationDetail({
     ? automationRun.completedAt - automationRun.startedAt
     : null;
 
+  const delayLabel = automationRun.delayMs ? formatDelay(automationRun.delayMs) : null;
+  const startedLabel = formatRelativeTime(automationRun.startedAt || automationRun.createdAt);
+  const pendingMessage = automationRun.status === 'pending'
+    ? delayLabel
+      ? `Waiting ${delayLabel} delay before starting tests...`
+      : 'Tests are queued to start soon...'
+    : null;
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -76,7 +87,7 @@ export function AutomationDetail({
               <h2 className="text-base font-semibold tracking-tight">
                 PR #{automationRun.prNumber}
               </h2>
-              {getStatusBadge(automationRun.status)}
+              {getStatusBadge(automationRun)}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5 max-w-lg truncate">
               {automationRun.prTitle}
@@ -119,7 +130,7 @@ export function AutomationDetail({
             <div className="space-y-0.5">
               <div className="text-[11px] text-muted-foreground font-medium">Started</div>
               <div className="text-xs">
-                {formatRelativeTime(automationRun.startedAt || automationRun.createdAt)}
+                {startedLabel}
               </div>
             </div>
             <div className="space-y-0.5">
@@ -187,9 +198,11 @@ export function AutomationDetail({
         <Card className="border-border/40">
           <CardContent className="py-10 text-center">
             <p className="text-xs text-muted-foreground">
-              {automationRun.status === 'running' || automationRun.status === 'pending'
+              {automationRun.status === 'running'
                 ? 'Tests are still running...'
-                : 'No test results available for this automation run.'}
+                : automationRun.status === 'pending'
+                  ? pendingMessage
+                  : 'No test results available for this automation run.'}
             </p>
           </CardContent>
         </Card>

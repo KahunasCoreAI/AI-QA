@@ -19,6 +19,19 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
+export function formatDelay(ms: number): string {
+  const safeMs = Math.max(0, ms);
+  if (safeMs < 60000) {
+    const seconds = Math.max(1, Math.ceil(safeMs / 1000));
+    return `${seconds}s`;
+  }
+  const totalMinutes = Math.ceil(safeMs / 60000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
 // Format relative time
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();

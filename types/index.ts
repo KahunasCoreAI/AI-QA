@@ -262,6 +262,8 @@ export interface AutomationRun {
   testRunId?: string;
   status: AutomationRunStatus;
   createdAt: number;
+  scheduledFor?: number;
+  delayMs?: number;
   startedAt?: number;
   completedAt?: number;
   passed: number;

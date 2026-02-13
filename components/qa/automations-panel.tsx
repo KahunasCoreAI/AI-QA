@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { MoreHorizontal, ExternalLink, Play, Trash2, Eye, Zap, Settings } from 'lucide-react';
 import type { AutomationRun } from '@/types';
-import { formatRelativeTime } from '@/lib/utils';
+import { formatDelay, formatRelativeTime } from '@/lib/utils';
 
 interface AutomationsPanelProps {
   automationRuns: AutomationRun[];
@@ -33,8 +33,8 @@ interface AutomationsPanelProps {
   onOpenSettings: () => void;
 }
 
-const getStatusBadge = (status: AutomationRun['status']) => {
-  switch (status) {
+const getStatusBadge = (run: AutomationRun) => {
+  switch (run.status) {
     case 'completed':
       return <Badge className="bg-[#30a46c]/8 text-[#30a46c] border-[#30a46c]/15 text-[11px] font-medium px-1.5 py-0">Completed</Badge>;
     case 'failed':
@@ -44,10 +44,17 @@ const getStatusBadge = (status: AutomationRun['status']) => {
     case 'selecting_tests':
       return <Badge className="bg-[#6e56cf]/8 text-[#6e56cf] border-[#6e56cf]/15 text-[11px] font-medium px-1.5 py-0">Selecting</Badge>;
     case 'pending':
+      if (run.delayMs) {
+        return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">Delayed {formatDelay(run.delayMs)}</Badge>;
+      }
       return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">Pending</Badge>;
     default:
-      return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">{status}</Badge>;
+      return <Badge variant="secondary" className="text-[11px] font-medium px-1.5 py-0">{run.status}</Badge>;
   }
+};
+
+const getStartedLabel = (run: AutomationRun) => {
+  return formatRelativeTime(run.startedAt || run.createdAt);
 };
 
 export function AutomationsPanel({
@@ -152,11 +159,11 @@ export function AutomationsPanel({
                 </TableCell>
                 <TableCell>
                   <span className="text-[11px] text-muted-foreground">
-                    {formatRelativeTime(run.startedAt || run.createdAt)}
+                    {getStartedLabel(run)}
                   </span>
                 </TableCell>
                 <TableCell>
-                  {getStatusBadge(run.status)}
+                  {getStatusBadge(run)}
                 </TableCell>
                 <TableCell>
                   <DropdownMenu>
