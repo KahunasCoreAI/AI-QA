@@ -15,7 +15,7 @@ import type {
 import { generateId } from '@/lib/utils';
 import { enforceRateLimit } from '@/lib/security/rate-limit';
 import { handleRouteError } from '@/lib/server/route-utils';
-import { requireTeamContext } from '@/lib/server/team-context';
+import { requireTeamContext, canManageTeamSettings } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys, saveTeamState } from '@/lib/server/team-state-store';
 import { releaseAccount, tryAcquireAccount } from '@/lib/server/account-locks';
 
@@ -663,6 +663,14 @@ export async function POST(request: NextRequest) {
   try {
     const team = await requireTeamContext();
     enforceRateLimit(`generate-tests:post:${team.userId}`, { limit: 20, windowMs: 60_000 });
+
+    // Only the settings owner can generate AI tests
+    if (!canManageTeamSettings(team.email)) {
+      return NextResponse.json(
+        { error: 'AI test generation is restricted to the designated settings owner.' },
+        { status: 403 }
+      );
+    }
 
     const rawBody = await request.json();
     const body = kickoffSchema.parse(rawBody);

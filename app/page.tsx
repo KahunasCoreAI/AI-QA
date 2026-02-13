@@ -41,6 +41,7 @@ import {
   XCircle,
   Clock,
   Sparkles,
+  Lock,
 } from 'lucide-react';
 import type {
   AiGenerationJob,
@@ -122,6 +123,7 @@ export default function DashboardPage() {
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
   const [executionViewRunId, setExecutionViewRunId] = useState<string | null>(null);
   const [isPublishingDrafts, setIsPublishingDrafts] = useState(false);
+  const [showAiLockedMessage, setShowAiLockedMessage] = useState(false);
 
   const currentProject = getCurrentProject();
   const currentUserEmail = (currentViewer?.email || '').toLowerCase();
@@ -665,7 +667,10 @@ export default function DashboardPage() {
           return (
             <div className="space-y-5">
               <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setTestCreationMode(null)}>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
+                  setTestCreationMode(null);
+                  setShowAiLockedMessage(false);
+                }}>
                   <ArrowLeft className="mr-1.5 h-3 w-3" />
                   Back
                 </Button>
@@ -678,7 +683,10 @@ export default function DashboardPage() {
               <div className="grid md:grid-cols-2 gap-3 max-w-2xl">
                 <Card
                   className="cursor-pointer border-border/40 hover:border-primary/30 transition-colors duration-150"
-                  onClick={() => setTestCreationMode('manual')}
+                  onClick={() => {
+                    setTestCreationMode('manual');
+                    setShowAiLockedMessage(false);
+                  }}
                 >
                   <CardHeader className="pb-2">
                     <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -697,25 +705,57 @@ export default function DashboardPage() {
                 </Card>
 
                 <Card
-                  className="cursor-pointer border-border/40 hover:border-primary/30 transition-colors duration-150"
-                  onClick={() => setTestCreationMode('ai')}
+                  className={`border-border/40 transition-colors duration-150 ${
+                    canManageSettings
+                      ? 'cursor-pointer hover:border-primary/30'
+                      : 'cursor-not-allowed opacity-60 grayscale'
+                  }`}
+                  onClick={() => {
+                    if (canManageSettings) {
+                      setTestCreationMode('ai');
+                      setShowAiLockedMessage(false);
+                    } else {
+                      setShowAiLockedMessage(true);
+                    }
+                  }}
                 >
                   <CardHeader className="pb-2">
                     <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                      <Sparkles className="h-4 w-4" />
+                      {canManageSettings ? (
+                        <Sparkles className="h-4 w-4" />
+                      ) : (
+                        <Lock className="h-4 w-4" />
+                      )}
                       AI-Generated Tests
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Paste requirements or user stories to generate multiple tests automatically
+                      {canManageSettings
+                        ? 'Paste requirements or user stories to generate multiple tests automatically'
+                        : 'Restricted to settings owner'}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <p className="text-xs text-muted-foreground/60">
-                      Best for quickly creating comprehensive test suites from documentation.
+                      {canManageSettings
+                        ? 'Best for quickly creating comprehensive test suites from documentation.'
+                        : 'Contact your settings owner to generate AI tests.'}
                     </p>
                   </CardContent>
                 </Card>
               </div>
+
+              {/* Locked message - shown when user clicks AI card without permission */}
+              {showAiLockedMessage && (
+                <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 text-sm text-muted-foreground">
+                  <Lock className="h-4 w-4" />
+                  <span>
+                    AI test generation is restricted to the designated settings owner.
+                    <span className="block mt-1 text-xs text-muted-foreground/60">
+                      Signed in as {currentUserEmail}
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
           );
         }
