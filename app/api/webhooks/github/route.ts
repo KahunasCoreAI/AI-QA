@@ -488,7 +488,7 @@ async function processMergedPR(
 
   // Save state with system user (null userId)
   console.log('[webhook:github] Step 4: Saving state', { projectId, jobId, draftCount: drafts.length });
-  await saveTeamState(teamId, 'system', nextState);
+  await saveTeamState(teamId, null, nextState);
   console.log('[webhook:github] Step 4 complete: State saved');
 
   return {
