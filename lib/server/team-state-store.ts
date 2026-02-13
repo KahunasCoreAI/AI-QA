@@ -36,7 +36,7 @@ export async function getTeamStateForClient(teamId: string): Promise<QAState> {
   return sanitizeStateForClient(state);
 }
 
-export async function saveTeamState(teamId: string, userId: string, nextState: unknown): Promise<QAState> {
+export async function saveTeamState(teamId: string, userId: string | null, nextState: unknown): Promise<QAState> {
   const db = getDb();
   const sanitized = sanitizeStateForStorage(nextState);
 

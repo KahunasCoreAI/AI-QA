@@ -327,3 +327,167 @@ Provide 3-5 bullet points explaining why this test ${result.status}. Each bullet
     }
   }
 }
+
+// GitHub PR analysis schema
+const prAnalysisSchema = z.object({
+  testCases: z.array(z.object({
+    title: z.string(),
+    description: z.string(),
+    expectedOutcome: z.string(),
+    groupName: z.string(),
+  })),
+});
+
+export type PRTestSuggestion = z.infer<typeof prAnalysisSchema>['testCases'][number];
+
+/**
+ * Generate AI test suggestions for a merged GitHub PR
+ */
+export async function analyzeMergedPR(
+  prInfo: {
+    number: number;
+    title: string;
+    body: string | null;
+    mergedBy: string | null;
+    repoName: string;
+  },
+  changedFiles: {
+    filename: string;
+    status: string;
+    additions: number;
+    deletions: number;
+  }[],
+  modelId: string
+): Promise<PRTestSuggestion[]> {
+  const model = getModel(modelId);
+
+  // Prepare file change summary
+  const frontendExtensions = ['.tsx', '.jsx', '.ts', '.js', '.css', '.scss', '.less'];
+  const relevantFiles = changedFiles
+    .filter((f) => frontendExtensions.some((ext) => f.filename.endsWith(ext)))
+    .slice(0, 25);
+
+  const fileSummary = relevantFiles
+    .map((f) => `- ${f.filename} (${f.status}, +${f.additions} -${f.deletions})`)
+    .join('\n');
+
+  const domainKeywords = [
+    'auth', 'login', 'signup', 'register', 'dashboard', 'settings', 'profile',
+    'billing', 'payment', 'checkout', 'cart', 'user', 'admin', 'home',
+    'landing', 'pricing', 'contact', 'about', 'navigation', 'menu', 'sidebar',
+    'header', 'footer', 'modal', 'form', 'input', 'button', 'link', 'table',
+    'list', 'search', 'filter', 'sort', 'pagination', 'upload', 'download',
+  ];
+
+  // Detect domains from changed files
+  const detectedDomains: string[] = [];
+  for (const file of relevantFiles) {
+    const lowerPath = file.filename.toLowerCase();
+    for (const keyword of domainKeywords) {
+      if (lowerPath.includes(keyword) && !detectedDomains.includes(keyword)) {
+        detectedDomains.push(keyword);
+      }
+    }
+  }
+
+  const system = `You are a senior QA engineer. Based on a merged GitHub pull request, generate high-value test cases that validate the changes.
+
+IMPORTANT: You MUST respond with ONLY a valid JSON object. No markdown, no explanations, no code blocks.
+
+The JSON must have this exact structure:
+{
+  "testCases": [
+    {
+      "title": "Brief descriptive test title",
+      "description": "What this test validates",
+      "expectedOutcome": "What should happen when the test passes",
+      "groupName": "One of: ${domainKeywords.join(', ')}, or 'general'"
+    }
+  ]
+}
+
+Rules:
+- Keep tests atomic and actionable (one thing per test)
+- Focus on user-facing functionality
+- Include validation and edge cases
+- Use descriptive titles that explain what is being tested
+- Set groupName to a relevant domain or 'general'
+- Generate 2-5 test cases depending on the scope of changes
+- For larger PRs with many files, prioritize the most impactful tests`;
+
+  const prompt = `A pull request was merged to the repository:
+
+PR #${prInfo.number}: ${prInfo.title}
+${prInfo.body ? `Description:\n${prInfo.body}` : 'No description provided'}
+${prInfo.mergedBy ? `Merged by: ${prInfo.mergedBy}` : ''}
+Repository: ${prInfo.repoName}
+
+Changed frontend files (${relevantFiles.length} relevant files):
+${fileSummary}
+
+${detectedDomains.length > 0 ? `Detected domains: ${detectedDomains.join(', ')}` : 'No specific domains detected'}
+
+Generate test cases that validate this PR's changes. Focus on:
+1. Happy path workflows for the changed features
+2. Edge cases and input validation
+3. Error states if applicable
+4. Cross-component integration if multiple components changed
+
+Respond with ONLY the JSON object, nothing else.`;
+
+  try {
+    const { object } = await generateObject({
+      model,
+      schema: prAnalysisSchema,
+      system,
+      prompt,
+    });
+    return object.testCases;
+  } catch (error) {
+    console.log('generateObject failed, falling back to generateText:', error);
+
+    const { text } = await generateText({
+      model,
+      system: system + '\n\nRespond with ONLY the JSON object, nothing else.',
+      prompt,
+    });
+
+    // Try to extract JSON from the response
+    let jsonText = text.trim();
+
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.slice(7);
+    } else if (jsonText.startsWith('```')) {
+      jsonText = jsonText.slice(3);
+    }
+    if (jsonText.endsWith('```')) {
+      jsonText = jsonText.slice(0, -3);
+    }
+    jsonText = jsonText.trim();
+
+    const jsonMatch = jsonText.match(/[\[{][\s\S]*[\]}]/);
+    if (!jsonMatch) {
+      // Fallback to basic suggestion
+      return [{
+        title: `Verify PR #${prInfo.number} changes`,
+        description: `Test that the changes from PR "${prInfo.title}" work correctly`,
+        expectedOutcome: 'All changes from the PR function as expected',
+        groupName: detectedDomains[0] || 'general',
+      }];
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const validated = prAnalysisSchema.parse(parsed);
+      return validated.testCases;
+    } catch {
+      // Final fallback
+      return [{
+        title: `Verify PR #${prInfo.number} changes`,
+        description: `Test that the changes from PR "${prInfo.title}" work correctly`,
+        expectedOutcome: 'All changes from the PR function as expected',
+        groupName: detectedDomains[0] || 'general',
+      }];
+    }
+  }
+}

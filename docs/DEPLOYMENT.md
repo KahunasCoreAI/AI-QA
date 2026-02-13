@@ -60,6 +60,11 @@ Optional provider defaults:
 - `BROWSER_USE_CLOUD_MODEL`
 - `NEXT_PUBLIC_DEFAULT_AI_MODEL`
 
+GitHub Webhook (for automatic test generation from merged PRs):
+
+- `GITHUB_WEBHOOK_SECRET` - Secret token for webhook verification
+- `GITHUB_TOKEN` - Personal Access Token for fetching PR details
+
 Access policy values:
 
 - `ALLOWED_EMAIL_DOMAIN`

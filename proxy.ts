@@ -8,7 +8,12 @@ const ALLOWED_EMAIL_DOMAIN = (
 )
   .trim()
   .toLowerCase();
-const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/unauthorized']);
+const isPublicRoute = createRouteMatcher([
+  '/sign-in(.*)', 
+  '/sign-up(.*)', 
+  '/unauthorized',
+  '/api/webhooks(.*)',  // Exempt all webhook endpoints from auth
+]);
 
 function extractEmailFromClaims(claims: Record<string, unknown> | null | undefined): string | null {
   if (!claims) return null;
