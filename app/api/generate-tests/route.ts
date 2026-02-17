@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai-client';
-import { DEFAULT_BROWSER_PROVIDER, getBrowserProvider } from '@/lib/browser/providers';
+import { getBrowserProvider } from '@/lib/browser/providers';
 import type {
   AiDraftNotification,
   AiGenerationJob,
@@ -18,13 +18,8 @@ import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext, canManageTeamSettings } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys, saveTeamState } from '@/lib/server/team-state-store';
 import { releaseAccount, tryAcquireAccount } from '@/lib/server/account-locks';
-
-interface ExecutionCredentials {
-  email: string;
-  password: string;
-  profileId?: string;
-  metadata?: Record<string, string>;
-}
+import { normalizeSettings } from '@/lib/server/execute-tests';
+import type { ExecutionCredentials } from '@/lib/server/execute-tests';
 
 const RUNNING_STALE_MS = 10 * 60 * 1000;
 const MAX_GENERATED_TESTS = 10;
@@ -50,23 +45,6 @@ const kickoffSchema = z.object({
   userAccountId: z.string().trim().min(1).optional(),
   settings: z.custom<Partial<QASettings>>().optional(),
 });
-
-function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> {
-  const merged: Partial<QASettings> = {
-    ...settings,
-    hyperbrowserEnabled: settings?.hyperbrowserEnabled ?? true,
-    browserProvider: settings?.browserProvider || DEFAULT_BROWSER_PROVIDER,
-    providerApiKeys: settings?.providerApiKeys || {},
-  };
-
-  return {
-    ...merged,
-    browserProvider:
-      merged.hyperbrowserEnabled === false && merged.browserProvider !== 'browser-use-cloud'
-        ? 'browser-use-cloud'
-        : merged.browserProvider,
-  };
-}
 
 function normalizeText(input: string): string {
   return input

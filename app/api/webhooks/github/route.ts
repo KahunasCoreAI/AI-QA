@@ -178,6 +178,14 @@ async function fetchPRFiles(owner: string, repo: string, pullNumber: number): Pr
   return { files, totalCount };
 }
 
+const domainKeywords = [
+  'auth', 'login', 'signup', 'register', 'dashboard', 'settings', 'profile',
+  'billing', 'payment', 'checkout', 'cart', 'user', 'admin', 'home',
+  'landing', 'pricing', 'contact', 'about', 'navigation', 'menu', 'sidebar',
+  'header', 'footer', 'modal', 'form', 'input', 'button', 'link', 'table',
+  'list', 'search', 'filter', 'sort', 'pagination', 'upload', 'download',
+];
+
 // Extract frontend file changes from PR
 function extractFrontendChanges(files: Array<{ filename: string; status: string; patch: string | null }>): {
   frontendFiles: string[];
@@ -324,14 +332,6 @@ Return JSON: { "testCases": [{ "title": "...", "description": "...", "expectedOu
     }];
   }
 }
-
-const domainKeywords = [
-  'auth', 'login', 'signup', 'register', 'dashboard', 'settings', 'profile',
-  'billing', 'payment', 'checkout', 'cart', 'user', 'admin', 'home',
-  'landing', 'pricing', 'contact', 'about', 'navigation', 'menu', 'sidebar',
-  'header', 'footer', 'modal', 'form', 'input', 'button', 'link', 'table',
-  'list', 'search', 'filter', 'sort', 'pagination', 'upload', 'download',
-];
 
 // AI test selection for automation - selects a mix of new + existing tests
 async function selectTestsForAutomation(
@@ -619,11 +619,12 @@ async function processMergedPR(
     const usernamesMatch = autoSettings.allowedGitHubUsernames.length === 0 ||
       autoSettings.allowedGitHubUsernames.some((u) => u.toLowerCase() === prAuthor.toLowerCase());
 
-    // Check branch patterns filter
+    // Check branch patterns filter (escape regex specials to prevent ReDoS)
     const branchMatch = autoSettings.branchPatterns.length === 0 ||
       autoSettings.branchPatterns.some((pattern) => {
         if (pattern.includes('*')) {
-          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
           return regex.test(baseBranch);
         }
         return pattern === baseBranch;

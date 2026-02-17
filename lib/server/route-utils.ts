@@ -11,7 +11,8 @@ export function handleRouteError(error: unknown, fallbackMessage: string) {
     return NextResponse.json({ error: error.message }, { status: 429 });
   }
 
-  const message = error instanceof Error ? error.message : fallbackMessage;
-  return NextResponse.json({ error: message }, { status: 500 });
+  // Log full error server-side but only return the safe fallback to clients
+  console.error(`[route-error] ${fallbackMessage}:`, error);
+  return NextResponse.json({ error: fallbackMessage }, { status: 500 });
 }
 

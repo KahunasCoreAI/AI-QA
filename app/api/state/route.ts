@@ -42,11 +42,21 @@ export async function PUT(request: NextRequest) {
     if (canManage) {
       stateToSave = nextState;
     } else {
+      // Non-owners can only update a limited set of fields to prevent
+      // tampering with settings, projects, credentials, or automation config.
       const currentState = await getOrCreateTeamState(team.teamId);
+      const incoming = nextState as Record<string, unknown>;
       stateToSave = {
-        ...(nextState as Record<string, unknown>),
-        settings: currentState.settings,
-        projects: currentState.projects,
+        ...currentState,
+        // Fields non-owners are allowed to modify:
+        testCases: incoming.testCases ?? currentState.testCases,
+        testRuns: incoming.testRuns ?? currentState.testRuns,
+        testGroups: incoming.testGroups ?? currentState.testGroups,
+        aiDrafts: incoming.aiDrafts ?? currentState.aiDrafts,
+        aiDraftNotifications: incoming.aiDraftNotifications ?? currentState.aiDraftNotifications,
+        activeTestRuns: incoming.activeTestRuns ?? currentState.activeTestRuns,
+        currentProjectId: incoming.currentProjectId ?? currentState.currentProjectId,
+        lastUpdated: Date.now(),
       };
     }
 

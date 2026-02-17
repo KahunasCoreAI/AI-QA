@@ -1,27 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { QASettings } from '@/types';
-import { DEFAULT_BROWSER_PROVIDER, getBrowserProvider } from '@/lib/browser/providers';
+import { getBrowserProvider } from '@/lib/browser/providers';
 import { enforceRateLimit } from '@/lib/security/rate-limit';
 import { handleRouteError } from '@/lib/server/route-utils';
 import { requireTeamContext } from '@/lib/server/team-context';
 import { getOrCreateTeamState, getTeamProviderKeys } from '@/lib/server/team-state-store';
-
-function normalizeSettings(settings?: Partial<QASettings>): Partial<QASettings> {
-  const merged: Partial<QASettings> = {
-    ...settings,
-    hyperbrowserEnabled: settings?.hyperbrowserEnabled ?? true,
-    browserProvider: settings?.browserProvider || DEFAULT_BROWSER_PROVIDER,
-    providerApiKeys: settings?.providerApiKeys || {},
-  };
-
-  return {
-    ...merged,
-    browserProvider:
-      merged.hyperbrowserEnabled === false && merged.browserProvider !== 'browser-use-cloud'
-        ? 'browser-use-cloud'
-        : merged.browserProvider,
-  };
-}
+import { normalizeSettings } from '@/lib/server/execute-tests';
 
 /**
  * DELETE /api/auth-session — Delete provider profile

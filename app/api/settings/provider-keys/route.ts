@@ -12,7 +12,7 @@ export async function GET() {
     const team = await requireTeamContext();
     enforceRateLimit(`provider-keys:get:${team.userId}`, { limit: 120, windowMs: 60_000 });
     if (!canManageTeamSettings(team.email)) {
-      return NextResponse.json({ error: 'Contact Mark' }, { status: 403 });
+      return NextResponse.json({ error: 'Only the settings owner can manage provider keys' }, { status: 403 });
     }
 
     const status = await getTeamProviderKeyStatus(team.teamId);
@@ -27,7 +27,7 @@ export async function PUT(request: NextRequest) {
     const team = await requireTeamContext();
     enforceRateLimit(`provider-keys:put:${team.userId}`, { limit: 30, windowMs: 60_000 });
     if (!canManageTeamSettings(team.email)) {
-      return NextResponse.json({ error: 'Contact Mark' }, { status: 403 });
+      return NextResponse.json({ error: 'Only the settings owner can manage provider keys' }, { status: 403 });
     }
 
     const body = (await request.json()) as {

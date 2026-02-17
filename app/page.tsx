@@ -270,15 +270,23 @@ export default function DashboardPage() {
     }
   }, [currentProject, syncAiGenerationProjectState]);
 
+  const hasActiveAiJob = useMemo(
+    () => aiGenerationJobs.some((job) => job.status === 'running' || job.status === 'queued'),
+    [aiGenerationJobs]
+  );
+
   useEffect(() => {
     if (!currentProject) return;
 
     void refreshAiGenerationState();
+
+    // Only poll frequently when AI jobs are in progress; otherwise use a slower interval
+    const pollMs = hasActiveAiJob ? 3000 : 30000;
     const interval = setInterval(() => {
       void refreshAiGenerationState();
-    }, 3000);
+    }, pollMs);
     return () => clearInterval(interval);
-  }, [currentProject, refreshAiGenerationState]);
+  }, [currentProject, refreshAiGenerationState, hasActiveAiJob]);
 
   const handleAiJobQueued = useCallback(() => {
     void refreshAiGenerationState();

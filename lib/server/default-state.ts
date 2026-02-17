@@ -136,9 +136,19 @@ export function sanitizeStateForStorage(candidate: unknown): QAState {
 }
 
 export function sanitizeStateForClient(state: QAState): QAState {
+  // Redact sensitive fields before sending to the browser
+  const sanitizedUserAccounts: Record<string, typeof state.userAccounts[string]> = {};
+  for (const [projectId, accounts] of Object.entries(state.userAccounts)) {
+    sanitizedUserAccounts[projectId] = accounts.map((account) => ({
+      ...account,
+      password: '••••••••',
+    }));
+  }
+
   return {
     ...state,
     isFirstLoad: false,
+    userAccounts: sanitizedUserAccounts,
     settings: {
       ...state.settings,
       providerApiKeys: {},
